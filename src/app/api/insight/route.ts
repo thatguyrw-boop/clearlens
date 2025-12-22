@@ -4,7 +4,7 @@ import { LENS_PROMPTS } from "@/lib/lenses";
 
 /**
  * POST /api/insight
- * Runtime-only OpenAI initialization (Vercel safe)
+ * Vercel-safe: instantiate OpenAI inside handler (runtime only)
  */
 export async function POST(req: Request) {
   try {
@@ -18,24 +18,62 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ Instantiate OpenAI INSIDE handler (critical)
     const openai = new OpenAI({ apiKey });
 
     const body = await req.json();
+
     const {
       question,
       lens = "strategic",
       birthDate,
       birthTime,
       birthPlace,
+      metrics, // 👈 IMPORTANT: metrics from mobile
     } = body ?? {};
 
     if (!question || typeof question !== "string" || !question.trim()) {
-      return NextResponse.json(
-        { error: "Question is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Question is required" }, { status: 400 });
     }
+
+    /* -----------------------------
+       Metrics Context (CRITICAL)
+       - Treat as real device data (HealthKit)
+       - No "can't access data" disclaimers
+    ------------------------------ */
+    const rawSteps = metrics?.steps;
+    const rawCalories = metrics?.calories;
+    const rawSleepHours = metrics?.sleepHours;
+
+    const steps = Number(rawSteps);
+    const calories = Number(rawCalories);
+    const sleepHours = Number(rawSleepHours);
+
+    const hasSteps = Number.isFinite(steps);
+    const hasCalories = Number.isFinite(calories);
+    const hasSleep = Number.isFinite(sleepHours);
+
+    // If your mobile app sends 0 when missing, the model should handle it gracefully.
+    const metricsContext = `
+HEALTH METRICS (from the user's device via Apple Health/HealthKit; treat as real, current inputs):
+
+- Steps today: ${hasSteps ? steps : "unknown"}
+- Active calories today: ${hasCalories ? calories : "unknown"}
+- Sleep last night (hours): ${hasSleep ? sleepHours : "unknown"}
+
+RULES (non-negotiable):
+- Use these numbers directly in the answer.
+- Do NOT claim you "can't access real-time data" or "don't have access to HealthKit". You have the data above.
+- If values are unknown OR unusually low (e.g., 0), say so and give the most likely reason (no data yet, simulator, permissions, not refreshed) AND one specific next action.
+- When the user asks for something not computable from these metrics (e.g., exact calorie deficit without intake/BMR), say what you CAN conclude from the metrics and what additional input is needed.
+- Output format must be:
+
+1) METRICS SNAPSHOT: (repeat the numbers)
+2) DIRECT ANSWER: (answer the question plainly)
+3) COACHING: (1–3 concrete actions for today)
+4) IF DATA LOOKS OFF: (only if needed; one-liner + next step)
+
+Keep it grounded, practical, and specific. Avoid generic motivational talk.
+`;
 
     /* -----------------------------
        Astrology Context (Optional)
@@ -67,11 +105,8 @@ export async function POST(req: Request) {
         else sunSign = "ambitious Capricorn";
 
         astroContext = `
-The user has a ${sunSign} Sun${
-          birthTime || birthPlace ? " with additional birth details provided" : ""
-        }.
-Weave relevant ${sunSign.split(" ")[1]} traits subtly and insightfully.
-Keep it affirming, grounded, non-deterministic, and tied directly to the question when useful.
+Optional flavor: The user has a ${sunSign} Sun${birthTime || birthPlace ? " (with additional birth details)" : ""}.
+Keep it light, non-deterministic, and ONLY include it if it helps the answer. No preachy astrology.
         `;
       }
     } else {
@@ -83,8 +118,7 @@ Keep it affirming, grounded, non-deterministic, and tied directly to the questio
        Lens Prompt
     ------------------------------ */
     const lensPrompt =
-      LENS_PROMPTS[lens as keyof typeof LENS_PROMPTS] ??
-      LENS_PROMPTS.strategic;
+      LENS_PROMPTS[lens as keyof typeof LENS_PROMPTS] ?? LENS_PROMPTS.strategic;
 
     /* -----------------------------
        OpenAI Call
@@ -94,27 +128,23 @@ Keep it affirming, grounded, non-deterministic, and tied directly to the questio
       messages: [
         {
           role: "system",
-          content: `${lensPrompt}${astroContext}`,
+          content: `${lensPrompt}\n${metricsContext}\n${astroContext}`,
         },
         {
           role: "user",
           content: question.trim(),
         },
       ],
-      temperature: 0.8,
-      max_tokens: 1000,
+      temperature: 0.6, // slightly tighter = less fluffy, more grounded
+      max_tokens: 900,
     });
 
     const insight =
-      completion.choices?.[0]?.message?.content?.trim() ??
-      "No insight generated.";
+      completion.choices?.[0]?.message?.content?.trim() ?? "No insight generated.";
 
     return NextResponse.json({ insight });
   } catch (err) {
     console.error("Insight API error:", err);
-    return NextResponse.json(
-      { error: "Failed to generate insight" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to generate insight" }, { status: 500 });
   }
 }
