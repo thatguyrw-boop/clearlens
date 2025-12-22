@@ -2,13 +2,21 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { LENS_PROMPTS } from "@/lib/lenses";
 
+function num(x: any): number | undefined {
+  const v = typeof x === "string" ? Number(x) : x;
+  return Number.isFinite(v) ? Number(v) : undefined;
+}
+
+function fmt(n?: number, suffix = "") {
+  return n == null ? "—" : `${n}${suffix}`;
+}
+
 /**
  * POST /api/insight
- * Vercel-safe: instantiate OpenAI inside handler (runtime only)
+ * Runtime-only OpenAI initialization (Vercel safe)
  */
 export async function POST(req: Request) {
   try {
-    // 🔐 Ensure API key exists at runtime (NOT build time)
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       console.error("Missing OPENAI_API_KEY at runtime");
@@ -20,72 +28,54 @@ export async function POST(req: Request) {
 
     const openai = new OpenAI({ apiKey });
 
-    const body = await req.json();
-
+    const body = await req.json().catch(() => ({}));
     const {
       question,
       lens = "strategic",
       birthDate,
       birthTime,
       birthPlace,
-      metrics, // 👈 IMPORTANT: metrics from mobile
+      metrics: rawMetrics = {},
     } = body ?? {};
 
     if (!question || typeof question !== "string" || !question.trim()) {
       return NextResponse.json({ error: "Question is required" }, { status: 400 });
     }
 
-    /* -----------------------------
-       Metrics Context (CRITICAL)
-       - Treat as real device data (HealthKit)
-       - No "can't access data" disclaimers
-    ------------------------------ */
-    const rawSteps = metrics?.steps;
-    const rawCalories = metrics?.calories;
-    const rawSleepHours = metrics?.sleepHours;
+    // Accept both legacy + new metric names
+    const steps = num(rawMetrics.steps);
+    const activeCalories = num(rawMetrics.activeCalories ?? rawMetrics.calories);
+    const basalCalories = num(rawMetrics.basalCalories);
+    const totalCaloriesBurned = num(rawMetrics.totalCaloriesBurned);
+    const sleepHours = num(rawMetrics.sleepHours);
+    const restingHeartRate = num(rawMetrics.restingHeartRate);
+    const hrvSdnn = num(rawMetrics.hrvSdnn);
 
-    const steps = Number(rawSteps);
-    const calories = Number(rawCalories);
-    const sleepHours = Number(rawSleepHours);
+    const metricsLines: string[] = [];
+    if (steps != null) metricsLines.push(`- Steps today: ${steps}`);
+    if (activeCalories != null) metricsLines.push(`- Active calories burned: ${activeCalories} kcal`);
+    if (basalCalories != null) metricsLines.push(`- Basal calories burned: ${basalCalories} kcal`);
+    if (totalCaloriesBurned != null) metricsLines.push(`- Total calories burned: ${totalCaloriesBurned} kcal`);
+    if (sleepHours != null) metricsLines.push(`- Sleep: ${sleepHours} hours`);
+    if (restingHeartRate != null) metricsLines.push(`- Resting heart rate: ${restingHeartRate} bpm`);
+    if (hrvSdnn != null) metricsLines.push(`- HRV (SDNN): ${hrvSdnn} ms`);
 
-    const hasSteps = Number.isFinite(steps);
-    const hasCalories = Number.isFinite(calories);
-    const hasSleep = Number.isFinite(sleepHours);
-
-    // If your mobile app sends 0 when missing, the model should handle it gracefully.
-    const metricsContext = `
-HEALTH METRICS (from the user's device via Apple Health/HealthKit; treat as real, current inputs):
-
-- Steps today: ${hasSteps ? steps : "unknown"}
-- Active calories today: ${hasCalories ? calories : "unknown"}
-- Sleep last night (hours): ${hasSleep ? sleepHours : "unknown"}
-
-RULES (non-negotiable):
-- Use these numbers directly in the answer.
-- Do NOT claim you "can't access real-time data" or "don't have access to HealthKit". You have the data above.
-- If values are unknown OR unusually low (e.g., 0), say so and give the most likely reason (no data yet, simulator, permissions, not refreshed) AND one specific next action.
-- When the user asks for something not computable from these metrics (e.g., exact calorie deficit without intake/BMR), say what you CAN conclude from the metrics and what additional input is needed.
-- Output format must be:
-
-1) METRICS SNAPSHOT: (repeat the numbers)
-2) DIRECT ANSWER: (answer the question plainly)
-3) COACHING: (1–3 concrete actions for today)
-4) IF DATA LOOKS OFF: (only if needed; one-liner + next step)
-
-Keep it grounded, practical, and specific. Avoid generic motivational talk.
-`;
+    const metricsContext =
+      metricsLines.length > 0
+        ? `\n\nTODAY'S APPLE HEALTH METRICS (ground truth — use these exact numbers):\n${metricsLines.join(
+            "\n"
+          )}\n`
+        : `\n\nNo Apple Health metrics were provided. If the user asks for a number you don't have, say what is missing and suggest how to collect it.\n`;
 
     /* -----------------------------
        Astrology Context (Optional)
     ------------------------------ */
     let astroContext = "";
-
     if (birthDate && typeof birthDate === "string") {
       const date = new Date(`${birthDate.trim()}T12:00:00Z`);
-
       if (isNaN(date.getTime())) {
         astroContext =
-          "\nAn invalid birth date was provided. Keep insights general and non-astrological.";
+          "\nInvalid birth date provided. Keep insights general and non-astrological.";
       } else {
         const month = date.getUTCMonth() + 1;
         const day = date.getUTCDate();
@@ -104,45 +94,61 @@ Keep it grounded, practical, and specific. Avoid generic motivational talk.
         else if ((month === 11 && day >= 22) || (month === 12 && day <= 21)) sunSign = "adventurous Sagittarius";
         else sunSign = "ambitious Capricorn";
 
-        astroContext = `
-Optional flavor: The user has a ${sunSign} Sun${birthTime || birthPlace ? " (with additional birth details)" : ""}.
-Keep it light, non-deterministic, and ONLY include it if it helps the answer. No preachy astrology.
-        `;
+        astroContext = `\nUser has a ${sunSign} Sun${
+          birthTime || birthPlace ? " (extra birth details provided)" : ""
+        }. Keep it light, non-deterministic, and only use if it helps the question.`;
       }
     } else {
-      astroContext =
-        "\nNo birth data was provided. Keep insights universal and avoid astrological references.";
+      astroContext = "\nNo birth info provided. Avoid astrology references.";
     }
 
     /* -----------------------------
-       Lens Prompt
+       Lens Prompt + Grounding Rules
     ------------------------------ */
     const lensPrompt =
       LENS_PROMPTS[lens as keyof typeof LENS_PROMPTS] ?? LENS_PROMPTS.strategic;
 
-    /* -----------------------------
-       OpenAI Call
-    ------------------------------ */
+    const groundingRules = `
+You are ClearLens. You MUST use the provided Apple Health metrics when answering.
+
+Rules:
+- If the user asks for a metric (steps, calories, sleep, RHR, HRV), answer with the exact value you have in the FIRST line.
+- If a value is missing, say it's missing and tell the user exactly what to connect/log to get it.
+- Keep it practical. Avoid generic “I can’t access data” if metrics are present.
+- Format the rest as:
+  1) ONE tradeoff that matters (1 sentence)
+  2) ONE decision rule (1 sentence)
+- Not medical advice; if symptoms are concerning, suggest a clinician.
+`;
+
+    const system = `${lensPrompt}\n${astroContext}\n${metricsContext}\n${groundingRules}`;
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        {
-          role: "system",
-          content: `${lensPrompt}\n${metricsContext}\n${astroContext}`,
-        },
-        {
-          role: "user",
-          content: question.trim(),
-        },
+        { role: "system", content: system },
+        { role: "user", content: question.trim() },
       ],
-      temperature: 0.6, // slightly tighter = less fluffy, more grounded
-      max_tokens: 900,
+      temperature: 0.4,
+      max_tokens: 700,
     });
 
     const insight =
       completion.choices?.[0]?.message?.content?.trim() ?? "No insight generated.";
 
-    return NextResponse.json({ insight });
+    // Optional: include the metrics we saw (helps debugging)
+    return NextResponse.json({
+      insight,
+      debugMetrics: {
+        steps: fmt(steps),
+        activeCalories: fmt(activeCalories, " kcal"),
+        basalCalories: fmt(basalCalories, " kcal"),
+        totalCaloriesBurned: fmt(totalCaloriesBurned, " kcal"),
+        sleepHours: fmt(sleepHours, " h"),
+        restingHeartRate: fmt(restingHeartRate, " bpm"),
+        hrvSdnn: fmt(hrvSdnn, " ms"),
+      },
+    });
   } catch (err) {
     console.error("Insight API error:", err);
     return NextResponse.json({ error: "Failed to generate insight" }, { status: 500 });
