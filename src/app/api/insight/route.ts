@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import OpenAI from "openai";
 import { LENS_PROMPTS } from "@/lib/lenses";
 
+const VERSION = "metrics-v3";
+
 function num(x: any): number | undefined {
   const v = typeof x === "string" ? Number(x) : x;
   return Number.isFinite(v) ? Number(v) : undefined;
@@ -50,6 +52,8 @@ export async function POST(req: Request) {
     const sleepHours = num(rawMetrics.sleepHours);
     const restingHeartRate = num(rawMetrics.restingHeartRate);
     const hrvSdnn = num(rawMetrics.hrvSdnn);
+
+    const metricsFirstLine = `METRICS: steps=${steps ?? "—"}, active_kcal=${activeCalories ?? "—"}, basal_kcal=${basalCalories ?? "—"}, total_kcal=${totalCaloriesBurned ?? "—"}, sleep_h=${sleepHours ?? "—"}, rhr_bpm=${restingHeartRate ?? "—"}, hrv_ms=${hrvSdnn ?? "—"}`;
 
     const metricsLines: string[] = [];
     if (steps != null) metricsLines.push(`- Steps today: ${steps}`);
@@ -111,14 +115,27 @@ export async function POST(req: Request) {
     const groundingRules = `
 You are ClearLens. You MUST use the provided Apple Health metrics when answering.
 
-Rules:
-- If the user asks for a metric (steps, calories, sleep, RHR, HRV), answer with the exact value you have in the FIRST line.
-- If a value is missing, say it's missing and tell the user exactly what to connect/log to get it.
-- Keep it practical. Avoid generic “I can’t access data” if metrics are present.
-- Format the rest as:
-  1) ONE tradeoff that matters (1 sentence)
-  2) ONE decision rule (1 sentence)
-- Not medical advice; if symptoms are concerning, suggest a clinician.
+Hard requirements:
+- The VERY FIRST LINE of your response must be EXACTLY:
+  ${metricsFirstLine}
+- Do NOT claim you "can't access real-time data" or that you lack HealthKit access.
+- If a needed value is missing (shown as —), say what is missing and how to get it (Refresh, permissions, add data, test on device).
+
+Answer format (use these headings):
+DIRECT ANSWER:
+- (Answer the user's question in 1–3 sentences using the numbers.)
+
+INTERPRETATION:
+- (What the numbers suggest today. If values are 0/—, explain likely reasons.)
+- You MUST reference at least TWO metrics (e.g., steps + sleep, or sleep + HRV/RHR) in interpretation and in the actions.
+
+ACTIONS:
+- (1–3 concrete actions for today.)
+
+NOTES:
+- (Only if needed: missing data, safety caveat.)
+
+Not medical advice; if symptoms are concerning, suggest a clinician.
 `;
 
     const system = `${lensPrompt}\n${astroContext}\n${metricsContext}\n${groundingRules}`;
@@ -129,15 +146,21 @@ Rules:
         { role: "system", content: system },
         { role: "user", content: question.trim() },
       ],
-      temperature: 0.4,
-      max_tokens: 700,
+      temperature: 0.2,
+      max_tokens: 650,
     });
 
-    const insight =
+    const modelText =
       completion.choices?.[0]?.message?.content?.trim() ?? "No insight generated.";
+
+    // Hard-enforce first line metrics echo even if the model doesn't comply
+    const alreadyHasFirstLine = modelText.startsWith("METRICS:") || modelText.startsWith(metricsFirstLine);
+    const insight = alreadyHasFirstLine ? modelText : `${metricsFirstLine}\n\n${modelText}`;
 
     // Optional: include the metrics we saw (helps debugging)
     return NextResponse.json({
+      version: VERSION,
+      metricsFirstLine,
       insight,
       debugMetrics: {
         steps: fmt(steps),
