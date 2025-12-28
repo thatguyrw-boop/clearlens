@@ -1,27 +1,31 @@
-import { NextResponse } from "next/server";
-import OpenAI from "openai";
-import { LENS_PROMPTS } from "@/lib/lenses";
+// app/api/insight/route.ts
 
-const VERSION = "metrics-v3";
+import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
+import { createClient } from '@supabase/supabase-js';
 
-function num(x: any): number | undefined {
-  const v = typeof x === "string" ? Number(x) : x;
-  return Number.isFinite(v) ? Number(v) : undefined;
+const DEBUG_AI =
+  process.env.CLEARLENS_DEBUG_AI === "true" &&
+  process.env.NODE_ENV !== "production" &&
+  process.env.VERCEL_ENV !== "production";
+
+// Minimal in-memory rate limit (dev + small-scale). Not a substitute for edge/CDN limits.
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 30;
+const rateMap = new Map<string, { count: number; resetAt: number }>();
+
+// Supabase client — optional in dev; if env vars are missing, memory features are skipped.
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) return null;
+  return createClient(url, key);
 }
 
-function fmt(n?: number, suffix = "") {
-  return n == null ? "—" : `${n}${suffix}`;
-}
-
-/**
- * POST /api/insight
- * Runtime-only OpenAI initialization (Vercel safe)
- */
 export async function POST(req: Request) {
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      console.error("Missing OPENAI_API_KEY at runtime");
       return NextResponse.json(
         { error: "Server misconfigured: missing OpenAI credentials" },
         { status: 500 }
@@ -29,151 +33,332 @@ export async function POST(req: Request) {
     }
 
     const openai = new OpenAI({ apiKey });
-
     const body = await req.json().catch(() => ({}));
+
     const {
+      userId, // REQUIRED
       question,
-      lens = "strategic",
-      birthDate,
-      birthTime,
-      birthPlace,
+      isVoiceInput = false, // NEW: true if this came from voice transcription
       metrics: rawMetrics = {},
+      profile: rawProfile = {},
+      preferences: rawPreferences = {},
+      trends: rawTrends = {},
+      feedback, // optional: { rating: "positive" | "negative" }
     } = body ?? {};
 
-    if (!question || typeof question !== "string" || !question.trim()) {
-      return NextResponse.json({ error: "Question is required" }, { status: 400 });
+    if (DEBUG_AI) {
+      console.log("[insight] rawProfile received", rawProfile);
     }
 
-    // Accept both legacy + new metric names
+    if (!userId || !question || typeof question !== "string" || !question.trim()) {
+      return NextResponse.json(
+        { error: "userId and valid question are required" },
+        { status: 400 }
+      );
+    }
+
+    // Rate limit by userId
+    const now = Date.now();
+    const key = String(userId);
+    const entry = rateMap.get(key);
+    if (!entry || now > entry.resetAt) {
+      rateMap.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    } else {
+      entry.count += 1;
+      if (entry.count > RATE_MAX) {
+        return NextResponse.json(
+          { error: "Rate limit exceeded. Try again in a minute." },
+          { status: 429 }
+        );
+      }
+    }
+
+    // ====================== METRIC PARSING (UNCHANGED — YOUR MACROS STILL WORK!) ======================
+    const num = (x: any): number | undefined => {
+      const v = typeof x === "string" ? Number(x) : x;
+      return Number.isFinite(v) ? Number(v) : undefined;
+    };
+    const fmt = (n?: number, suffix = "") => (n == null ? "—" : `${n}${suffix}`);
+
+    const cmToFtIn = (cm?: number): string | undefined => {
+      if (cm == null) return undefined;
+      const totalIn = cm / 2.54;
+      const ft = Math.floor(totalIn / 12);
+      const inch = Math.round(totalIn - ft * 12);
+      return `${ft}′ ${inch}″`;
+    };
+
+    const kgToLbs = (kg?: number): number | undefined => {
+      if (kg == null) return undefined;
+      return Math.round(kg * 2.2046226218);
+    };
+
     const steps = num(rawMetrics.steps);
     const activeCalories = num(rawMetrics.activeCalories ?? rawMetrics.calories);
-    const basalCalories = num(rawMetrics.basalCalories);
     const totalCaloriesBurned = num(rawMetrics.totalCaloriesBurned);
+    const burnedSoFar = totalCaloriesBurned;
+    const dietaryCalories = num(rawMetrics.dietaryEnergyConsumed ?? rawMetrics.dietaryCalories);
+    const eatenSoFar = dietaryCalories;
+    const netDeficitSoFar = (burnedSoFar != null && eatenSoFar != null)
+      ? Math.round(burnedSoFar - eatenSoFar)
+      : undefined;
     const sleepHours = num(rawMetrics.sleepHours);
     const restingHeartRate = num(rawMetrics.restingHeartRate);
-    const hrvSdnn = num(rawMetrics.hrvSdnn);
+    const hrvRaw = num(rawMetrics.hrvSdnn);
+    const hrvSdnn = hrvRaw === 0 ? undefined : hrvRaw;
+    const dietaryProteinG = num(rawMetrics.dietaryProteinG);
+    const dietaryCarbsG = num(rawMetrics.dietaryCarbsG);
+    const dietaryFatG = num(rawMetrics.dietaryFatG);
+    const dietaryFiberG = num(rawMetrics.dietaryFiberG);
+    const workoutMinutes = num(rawMetrics.workoutMinutes ?? rawMetrics.workoutsMinutes);
+    const workoutCount = num(rawMetrics.workoutCount);
+    const hasAnyNutritionToday = rawMetrics.hasAnyNutritionToday === true;
+    const proteinBehindPace = rawMetrics.proteinBehindPace === true;
 
-    const metricsFirstLine = `METRICS: steps=${steps ?? "—"}, active_kcal=${activeCalories ?? "—"}, basal_kcal=${basalCalories ?? "—"}, total_kcal=${totalCaloriesBurned ?? "—"}, sleep_h=${sleepHours ?? "—"}, rhr_bpm=${restingHeartRate ?? "—"}, hrv_ms=${hrvSdnn ?? "—"}`;
+    // Profile
+    const age = num(rawProfile.age);
+    const biologicalSex = typeof rawProfile.biologicalSex === "string" ? rawProfile.biologicalSex : undefined;
+    const heightCm = num((rawProfile as any).heightCm);
+    const weightKg = num((rawProfile as any).weightKg);
 
-    const metricsLines: string[] = [];
-    if (steps != null) metricsLines.push(`- Steps today: ${steps}`);
-    if (activeCalories != null) metricsLines.push(`- Active calories burned: ${activeCalories} kcal`);
-    if (basalCalories != null) metricsLines.push(`- Basal calories burned: ${basalCalories} kcal`);
-    if (totalCaloriesBurned != null) metricsLines.push(`- Total calories burned: ${totalCaloriesBurned} kcal`);
-    if (sleepHours != null) metricsLines.push(`- Sleep: ${sleepHours} hours`);
-    if (restingHeartRate != null) metricsLines.push(`- Resting heart rate: ${restingHeartRate} bpm`);
-    if (hrvSdnn != null) metricsLines.push(`- HRV (SDNN): ${hrvSdnn} ms`);
+    const heightUs = cmToFtIn(heightCm);
+    const weightLbs = kgToLbs(weightKg);
 
-    const metricsContext =
-      metricsLines.length > 0
-        ? `\n\nTODAY'S APPLE HEALTH METRICS (ground truth — use these exact numbers):\n${metricsLines.join(
-            "\n"
-          )}\n`
-        : `\n\nNo Apple Health metrics were provided. If the user asks for a number you don't have, say what is missing and suggest how to collect it.\n`;
+    // Preferences
+    const pressurePreference = num(rawPreferences.pressure) ?? 2; // 1=low, 2=medium, 3=high
+    const tonePreference: "neutral" | "warm" | "sharp" =
+      rawPreferences?.tone === "warm" || rawPreferences?.tone === "sharp"
+        ? rawPreferences.tone
+        : "neutral";
 
-    /* -----------------------------
-       Astrology Context (Optional)
-    ------------------------------ */
-    let astroContext = "";
-    if (birthDate && typeof birthDate === "string") {
-      const date = new Date(`${birthDate.trim()}T12:00:00Z`);
-      if (isNaN(date.getTime())) {
-        astroContext =
-          "\nInvalid birth date provided. Keep insights general and non-astrological.";
-      } else {
-        const month = date.getUTCMonth() + 1;
-        const day = date.getUTCDate();
+    // Trends
+    const steps7dAvg = num(rawTrends.steps7dAvg);
+    const steps7dAvgUsable = (steps7dAvg != null && steps7dAvg >= 2000) ? steps7dAvg : undefined;
 
-        let sunSign = "mysterious soul";
-        if ((month === 1 && day >= 20) || (month === 2 && day <= 18)) sunSign = "innovative Aquarius";
-        else if ((month === 2 && day >= 19) || (month === 3 && day <= 20)) sunSign = "dreamy Pisces";
-        else if ((month === 3 && day >= 21) || (month === 4 && day <= 19)) sunSign = "bold Aries";
-        else if ((month === 4 && day >= 20) || (month === 5 && day <= 20)) sunSign = "steady Taurus";
-        else if ((month === 5 && day >= 21) || (month === 6 && day <= 20)) sunSign = "curious Gemini";
-        else if ((month === 6 && day >= 21) || (month === 7 && day <= 22)) sunSign = "nurturing Cancer";
-        else if ((month === 7 && day >= 23) || (month === 8 && day <= 22)) sunSign = "charismatic Leo";
-        else if ((month === 8 && day >= 23) || (month === 9 && day <= 22)) sunSign = "precise Virgo";
-        else if ((month === 9 && day >= 23) || (month === 10 && day <= 22)) sunSign = "harmonious Libra";
-        else if ((month === 10 && day >= 23) || (month === 11 && day <= 21)) sunSign = "intense Scorpio";
-        else if ((month === 11 && day >= 22) || (month === 12 && day <= 21)) sunSign = "adventurous Sagittarius";
-        else sunSign = "ambitious Capricorn";
+    // ====================== INTENT DETECTION ======================
+    const qLower = question.toLowerCase();
 
-        astroContext = `\nUser has a ${sunSign} Sun${
-          birthTime || birthPlace ? " (extra birth details provided)" : ""
-        }. Keep it light, non-deterministic, and only use if it helps the question.`;
-      }
-    } else {
-      astroContext = "\nNo birth info provided. Avoid astrology references.";
+    const isMetaFeedback = /\b(why are you|too harsh|too repetitive|stop roasting|same answers|feedback)\b/.test(qLower);
+    const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
+    const isFoodQuestion = /\b(what should i eat|dinner|lunch|snack|chicken|steak|shrimp|tacos|pizza|dessert|menu|burrito|lasagna|pasta)\b/.test(qLower);
+
+    const mentionsUnloggedFood = /\b(had|ate|just ate|just had|i had|i ate|burrito|lasagna|pizza|pasta|dessert)\b/.test(qLower);
+    const likelyUnlogged = mentionsUnloggedFood && (dietaryCalories == null || dietaryCalories < 800);
+
+    const wantsQuickLog = /\b(just log it|just need to log|just log|log it|log this|add it|already logged|all logged)\b/.test(qLower);
+
+    const planningLater = /\b(later|tonight|before bed|after dinner|movie night|popcorn|dessert later)\b/.test(qLower);
+
+    const isProgressCheck = /\b(progress|how am i doing|how\s*'s my|how is my|today so far|late night check|recap)\b/.test(qLower);
+    const baseNumbersRe = /\b(numbers?|calories|kcal|deficit|calculate|calculated|how did you|show your work|math)\b/;
+    const macroWordsRe = /\b(protein|carbs?|fat|fiber|macros?)\b/;
+    const numberCueRe = /\b(\d+|grams?|\bg\b|kcal|calories|how many|how much|what are|numbers?)\b/;
+    const isNumbersRequest = baseNumbersRe.test(qLower) || (macroWordsRe.test(qLower) && numberCueRe.test(qLower));
+
+    const intent =
+      isMetaFeedback ? "meta_feedback" :
+      (isNumbersRequest && isMotivationRequest) ? "motivation" :
+      isNumbersRequest ? "numbers" :
+      isFoodQuestion ? "food" :
+      isMotivationRequest ? "motivation" :
+      isProgressCheck ? "progress" :
+      "general";
+
+    const isProfileQuery = /\b(do you know|what\s*'s|what is|tell me)\b.*\b(height|weight|age)\b/.test(qLower);
+
+    // ====================== ON-TRACK ASSESSMENT ======================
+    const movementOk = steps != null ? (steps7dAvg ? steps >= steps7dAvg * 0.8 : steps >= 6000) : true;
+    const sleepOk = sleepHours != null ? sleepHours >= 6.5 : true;
+    const nutritionOk = hasAnyNutritionToday ? !proteinBehindPace : true;
+    const trainingOk =
+      workoutMinutes != null || workoutCount != null
+        ? true
+        : (steps != null ? steps >= 10000 : true);
+
+    const onTrack = [movementOk, sleepOk, nutritionOk, trainingOk].filter(Boolean).length >= 3;
+
+    // ====================== USER MEMORY FROM SUPABASE (optional) ======================
+    const supabase = getSupabase();
+
+    let memories: Record<string, any> = {};
+    if (supabase) {
+      const { data: memoryData, error: memoryError } = await supabase
+        .from('user_memories')
+        .select('key,value')
+        .eq('user_id', userId);
+
+      if (memoryError) console.error('Supabase memory fetch error:', memoryError);
+
+      memories = memoryData?.reduce((acc, row) => {
+        acc[row.key] = row.value;
+        return acc;
+      }, {} as Record<string, any>) || {};
     }
 
-    /* -----------------------------
-       Lens Prompt + Grounding Rules
-    ------------------------------ */
-    const lensPrompt =
-      LENS_PROMPTS[lens as keyof typeof LENS_PROMPTS] ?? LENS_PROMPTS.strategic;
+    const daysActive = Number(memories.days_active ?? 0);
+    const proteinStreak = Number(memories.protein_streak_days ?? 0);
+    const favoriteSnack = (memories.favorite_snack as string) || null;
+    const workoutTimePref = (memories.workout_time_pref as string) || null;
+    const goal = (memories.goal as string) || null;
+    const lastFeedback = (memories.last_feedback as string) || null;
 
-    const groundingRules = `
-You are ClearLens. You MUST use the provided Apple Health metrics when answering.
+    // ====================== ASYNC MEMORY UPDATE ======================
+    (async () => {
+      if (!supabase) return;
+      try {
+        const updates: Record<string, any> = {
+          days_active: daysActive + 1,
+        };
 
-Hard requirements:
-- The VERY FIRST LINE of your response must be EXACTLY:
-  ${metricsFirstLine}
-- Do NOT claim you "can't access real-time data" or that you lack HealthKit access.
-- If a needed value is missing (shown as —), say what is missing and how to get it (Refresh, permissions, add data, test on device).
+        if (dietaryProteinG != null && dietaryProteinG >= 140) {
+          updates.protein_streak_days = proteinStreak + 1;
+        } else if (proteinStreak > 0) {
+          updates.protein_streak_days = 0;
+        }
 
-Answer format (use these headings):
-DIRECT ANSWER:
-- (Answer the user's question in 1–3 sentences using the numbers.)
+        if (feedback?.rating) {
+          updates.last_feedback = feedback.rating === "negative" ? "too_much_pressure" : "good";
+        }
 
-INTERPRETATION:
-- (What the numbers suggest today. If values are 0/—, explain likely reasons.)
-- You MUST reference at least TWO metrics (e.g., steps + sleep, or sleep + HRV/RHR) in interpretation and in the actions.
+        for (const [key, value] of Object.entries(updates)) {
+          await supabase
+            .from('user_memories')
+            .upsert(
+              { user_id: userId, key, value },
+              { onConflict: 'user_id,key' }
+            );
+        }
+      } catch (e) {
+        console.error('Memory update failed:', e);
+      }
+    })();
 
-ACTIONS:
-- (1–3 concrete actions for today.)
+    // ====================== EFFECTIVE PRESSURE ======================
+    let effectivePressure: "low" | "medium" | "high" =
+      pressurePreference === 1 ? "low" :
+      pressurePreference === 3 ? "high" :
+      "medium";
 
-NOTES:
-- (Only if needed: missing data, safety caveat.)
+    if (lastFeedback === "too_much_pressure") {
+      effectivePressure = effectivePressure === "high" ? "medium" : "low";
+    }
 
-Not medical advice; if symptoms are concerning, suggest a clinician.
+    if (intent === "numbers" || intent === "meta_feedback" || (onTrack && intent !== "motivation")) {
+      effectivePressure = "low";
+    } else if (onTrack && effectivePressure === "high") {
+      effectivePressure = "medium";
+    }
+
+    // ====================== VOICE INPUT HANDLING ======================
+    const voiceContext = isVoiceInput
+      ? "\nThis question came from voice input — keep response extra concise, clear, and spoken-friendly (short sentences, no jargon)."
+      : "";
+
+    // ====================== TIME CONTEXT ======================
+    const tzOffsetMinutes = num((rawProfile as any)?.tzOffsetMinutes ?? (rawPreferences as any)?.tzOffsetMinutes);
+    const localHour = (() => {
+      if (tzOffsetMinutes == null) return new Date().getHours();
+      const utcMs = Date.now() + new Date().getTimezoneOffset() * 60_000;
+      const localMs = utcMs - tzOffsetMinutes * 60_000;
+      return new Date(localMs).getHours();
+    })();
+    const isLateNight = localHour >= 20 || localHour <= 5;
+    const isEvening = localHour >= 18 && localHour < 22;
+
+    // ====================== SYSTEM PROMPT — CONCISE, CHAT-STYLE, MEMORY-AWARE ======================
+    const systemPrompt = `You are ClearLens — a quiet, personal wellness companion that feels like texting a real friend who knows your habits and goals.
+
+CURRENT SETTINGS
+- Pressure: ${effectivePressure.toUpperCase()}
+- Tone: ${tonePreference.toUpperCase()}
+- Intent: ${intent.toUpperCase()}
+- On track today: ${onTrack ? "YES" : "NO"}
+- Late night: ${isLateNight ? "YES" : "NO"}
+${voiceContext}
+
+RELATIONSHIP MEMORY (use naturally)
+- Days active: ${daysActive}
+- Goal: ${goal || "not set"}
+- Favorite snack: ${favoriteSnack || "none"}
+- Workout time: ${workoutTimePref || "any"}
+- Protein streak: ${proteinStreak} days
+- Recent feedback: ${lastFeedback || "none"}
+
+PREFERENCE
+- When discussing height/weight or calorie targets, use US units first (ft/in, lb). You may include metric in parentheses.
+
+PROFILE (available from HealthKit; use when asked)
+- Age: ${fmt(age)}
+- Sex: ${biologicalSex || "—"}
+- Height: ${heightUs || "—"} (${fmt(heightCm, " cm")})
+- Weight: ${weightLbs != null ? `${weightLbs} lb` : "—"} (${fmt(weightKg, " kg")})
+
+TODAY (use only what’s relevant; avoid repeating unchanged metrics on follow-ups)
+- Steps: ${fmt(steps)} (7-day avg: ${fmt(steps7dAvgUsable)})
+- Burned so far: ~${fmt(totalCaloriesBurned)} kcal
+- Eaten so far: ${fmt(dietaryCalories)} kcal
+${likelyUnlogged ? "- Note: user mentioned food that may not be logged yet; treat intake as incomplete." : ""}
+${wantsQuickLog ? "- User wants to log the item quickly; offer a default estimate and ask to confirm." : ""}
+${wantsQuickLog ? "- User indicates food is already logged; treat intake as current." : ""}
+${isEvening ? "- Time context: evening; prefer light guidance and day‑wrap rather than optimization." : ""}
+${planningLater ? "- User is planning a later snack; answer directly without follow‑up interrogation." : ""}
+- Net (burned − eaten): ${fmt(netDeficitSoFar)} kcal
+- Protein: ${fmt(dietaryProteinG)} g
+- Carbs/Fat/Fiber: ${dietaryCarbsG != null ? fmt(dietaryCarbsG) : "—"}/${dietaryFatG != null ? fmt(dietaryFatG) : "—"}/${dietaryFiberG != null ? fmt(dietaryFiberG) : "—"} g
+- Sleep: ${fmt(sleepHours)} h
+
+Question: "${question.trim()}"
 `;
 
-    const system = `${lensPrompt}\n${astroContext}\n${metricsContext}\n${groundingRules}`;
+    const debugFooter = DEBUG_AI
+      ? `\n\n—\nDEBUG\n• intent: ${intent}\n• onTrack: ${onTrack}\n• pressure: ${effectivePressure}\n• tone: ${tonePreference}\n• voiceInput: ${isVoiceInput}\n• localHour: ${localHour}\n• lateNight: ${isLateNight}\n• daysActive: ${daysActive}\n• proteinStreak: ${proteinStreak}`
+        + `\n• profile.age: ${fmt(age)}`
+        + `\n• profile.sex: ${biologicalSex || "—"}`
+        + `\n• profile.height: ${heightUs || "—"} (${fmt(heightCm, " cm")})`
+        + `\n• profile.weight: ${weightLbs != null ? `${weightLbs} lb` : "—"} (${fmt(weightKg, " kg")})`
+      : "";
+
+    const temperature = intent === "numbers"
+      ? 0.2
+      : intent === "motivation"
+        ? (effectivePressure === "high" ? 0.7 : 0.55)
+        : (isEvening ? 0.3 : 0.35);
+
+    // Deterministic profile answer: avoid the model hallucinating "I don't have that" when profile is present.
+    if (isProfileQuery && (heightUs || weightLbs != null || age != null)) {
+      if (DEBUG_AI) {
+        console.log("[insight] profile shortcut", { age, biologicalSex, heightCm, weightKg, heightUs, weightLbs });
+      }
+      const parts: string[] = [];
+      if (heightUs) parts.push(`Height: ${heightUs}`);
+      if (weightLbs != null) parts.push(`Weight: ${weightLbs} lb`);
+      if (age != null) parts.push(`Age: ${age}`);
+
+      const baseReply = parts.length
+        ? `Yep — ${parts.join(" • ")}.`
+        : `I don't see height/weight/age from HealthKit yet.`;
+
+      const reply = DEBUG_AI ? `[PROFILE_SHORTCUT] ${baseReply}` : baseReply;
+
+      return NextResponse.json({ insight: reply + debugFooter });
+    }
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: 'gpt-4o-mini',
+      temperature,
+      max_tokens: 300, // Enforce brevity
       messages: [
-        { role: "system", content: system },
-        { role: "user", content: question.trim() },
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: question.trim() },
       ],
-      temperature: 0.2,
-      max_tokens: 650,
     });
 
-    const modelText =
-      completion.choices?.[0]?.message?.content?.trim() ?? "No insight generated.";
+    const insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
 
-    // Hard-enforce first line metrics echo even if the model doesn't comply
-    const alreadyHasFirstLine = modelText.startsWith("METRICS:") || modelText.startsWith(metricsFirstLine);
-    const insight = alreadyHasFirstLine ? modelText : `${metricsFirstLine}\n\n${modelText}`;
+    return NextResponse.json({ insight: insight + debugFooter });
 
-    // Optional: include the metrics we saw (helps debugging)
-    return NextResponse.json({
-      version: VERSION,
-      metricsFirstLine,
-      insight,
-      debugMetrics: {
-        steps: fmt(steps),
-        activeCalories: fmt(activeCalories, " kcal"),
-        basalCalories: fmt(basalCalories, " kcal"),
-        totalCaloriesBurned: fmt(totalCaloriesBurned, " kcal"),
-        sleepHours: fmt(sleepHours, " h"),
-        restingHeartRate: fmt(restingHeartRate, " bpm"),
-        hrvSdnn: fmt(hrvSdnn, " ms"),
-      },
-    });
-  } catch (err) {
-    console.error("Insight API error:", err);
-    return NextResponse.json({ error: "Failed to generate insight" }, { status: 500 });
+  } catch (error: any) {
+    console.error('Insight API error:', error);
+    return NextResponse.json({ error: 'Failed to generate insight' }, { status: 500 });
   }
 }
