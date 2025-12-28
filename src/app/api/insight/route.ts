@@ -165,6 +165,7 @@ export async function POST(req: Request) {
       "general";
 
     const isProfileQuery = /\b(do you know|what\s*'s|what is|tell me)\b.*\b(height|weight|age)\b/.test(qLower);
+    const isRecoveryQuery = /\b(recovery|readiness|sleep|hrv|sdnn|resting\s*hr|rhr|resting heart)\b/.test(qLower);
 
     // ====================== ON-TRACK ASSESSMENT ======================
     const movementOk = steps != null ? (steps7dAvg ? steps >= steps7dAvg * 0.8 : steps >= 6000) : true;
@@ -340,6 +341,34 @@ Question: "${question.trim()}"
 
       const reply = DEBUG_AI ? `[PROFILE_SHORTCUT] ${baseReply}` : baseReply;
 
+      return NextResponse.json({ insight: reply + debugFooter });
+    }
+
+    // Deterministic recovery answer: keep it on recovery metrics, not calories.
+    if (isRecoveryQuery) {
+      const hasSleep = sleepHours != null && Number.isFinite(sleepHours) && sleepHours > 0;
+      const hasRhr = restingHeartRate != null && Number.isFinite(restingHeartRate) && restingHeartRate > 0;
+      const hasHrv = hrvSdnn != null && Number.isFinite(hrvSdnn) && hrvSdnn > 0;
+
+      if (!hasSleep && !hasRhr && !hasHrv) {
+        const msg = "I don’t have today’s recovery metrics yet (sleep/HRV/resting HR are blank right now). Tap ⟳ refresh once and I’ll give you a real recovery read.";
+        return NextResponse.json({ insight: msg + debugFooter });
+      }
+
+      const parts: string[] = [];
+      if (hasSleep) {
+        const h = Math.round(sleepHours * 10) / 10;
+        parts.push(`Sleep: ${h}h`);
+      }
+      if (hasRhr) parts.push(`Resting HR: ${Math.round(restingHeartRate)} bpm`);
+      if (hasHrv) parts.push(`HRV (SDNN): ${Math.round(hrvSdnn)} ms`);
+
+      let note = "";
+      if (hasSleep && sleepHours < 6.5) note = "Sleep is a bit short — take it slightly easier today.";
+      else if (hasSleep) note = "Sleep looks solid — recovery should be decent.";
+      else note = "Recovery looks moderate based on limited data.";
+
+      const reply = `${parts.join(" • ")}. ${note}`;
       return NextResponse.json({ insight: reply + debugFooter });
     }
 
