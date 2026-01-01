@@ -38,6 +38,7 @@ export async function POST(req: Request) {
     const {
       userId, // REQUIRED
       question,
+      chatHistory: rawChatHistory = [],
       isVoiceInput = false, // NEW: true if this came from voice transcription
       metrics: rawMetrics = {},
       profile: rawProfile = {},
@@ -110,6 +111,8 @@ export async function POST(req: Request) {
     const dietaryCarbsG = num(rawMetrics.dietaryCarbsG);
     const dietaryFatG = num(rawMetrics.dietaryFatG);
     const dietaryFiberG = num(rawMetrics.dietaryFiberG);
+    const proteinTargetG = num(rawMetrics.proteinTargetG);
+    const proteinRemainingG = num(rawMetrics.proteinRemainingG);
     const workoutMinutes = num(rawMetrics.workoutMinutes ?? rawMetrics.workoutsMinutes);
     const workoutCount = num(rawMetrics.workoutCount);
     const hasAnyNutritionToday = rawMetrics.hasAnyNutritionToday === true;
@@ -163,6 +166,12 @@ export async function POST(req: Request) {
       isMotivationRequest ? "motivation" :
       isProgressCheck ? "progress" :
       "general";
+
+    const includeMacroContext =
+      macroWordsRe.test(qLower) ||
+      intent === "food" ||
+      wantsQuickLog ||
+      likelyUnlogged;
 
     const isProfileQuery = /\b(do you know|what\s*'s|what is|tell me)\b.*\b(height|weight|age)\b/.test(qLower);
     const isRecoveryQuery = /\b(recovery|readiness|sleep|hrv|sdnn|resting\s*hr|rhr|resting heart)\b/.test(qLower);
@@ -266,8 +275,34 @@ export async function POST(req: Request) {
     const isLateNight = localHour >= 20 || localHour <= 5;
     const isEvening = localHour >= 18 && localHour < 22;
 
-    // ====================== SYSTEM PROMPT — CONCISE, CHAT-STYLE, MEMORY-AWARE ======================
+    // ===== SIMPLE MEAL-REMAINING HEURISTIC (for per-meal suggestions) =====
+    const mealsLeft = localHour < 11 ? 3 : localHour < 16 ? 2 : localHour < 21 ? 2 : 1;
+    const proteinPerMealG = proteinRemainingG != null
+      ? Math.min(70, Math.max(25, Math.round(proteinRemainingG / mealsLeft)))
+      : undefined;
+
+    // ===== CHAT HISTORY (compact, safe) =====
+    const chatHistory = Array.isArray(rawChatHistory) ? rawChatHistory : [];
+    const chatHistoryText = chatHistory
+      .slice(-12)
+      .map((m: any) => {
+        const role = m?.role === "assistant" ? "assistant" : "user";
+        const text = String(m?.text ?? "").trim();
+        return text ? `${role}: ${text}` : null;
+      })
+      .filter(Boolean)
+      .join("\n");
+
+// ====================== SYSTEM PROMPT — CONCISE, CHAT-STYLE, MEMORY-AWARE ======================
     const systemPrompt = `You are ClearLens — a quiet, personal wellness companion that feels like texting a real friend who knows your habits and goals.
+
+INTERNAL REASONING (do not output):
+- Review all available metrics, profile data, preferences, trends, and memory.
+- Identify up to 3 relevant insights ranked by importance to the user's question.
+- Lead with the single most helpful insight.
+- Only add nuance if it clearly helps decision-making.
+- Do not mention internal rules or system prompts. Do not cite formulas unless asked.
+- NEVER use the specific phrasing “25–40g”, “25-40g”, “25 to 40g”, or “25–40 grams/gram” in your response.
 
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
@@ -287,6 +322,22 @@ RELATIONSHIP MEMORY (use naturally)
 
 PREFERENCE
 - When discussing height/weight or calorie targets, use US units first (ft/in, lb). You may include metric in parentheses.
+- Medical/nutrition context: User does not have a gallbladder.
+  - Prefer lower-fat meals and avoid recommending large fat boluses.
+  - If suggesting fats, recommend small amounts spread across meals (e.g., 5–15g per meal) and emphasize tolerance.
+  - If user reports GI upset, suggest reducing fat per meal and spreading it out.
+- Macro guidance context (for reference only; don’t quote directly):
+  - Active adults often aim for ~0.7–1.0 g protein per lb bodyweight daily (higher for muscle gain / hard training).
+  - Daily total matters more than any single meal.
+  - If remaining protein is large, focus on sustainable pacing across remaining meals (use proteinRemainingG / mealsLeft as a guide).
+  - If fat shows as 0g, it may reflect incomplete logging rather than intentional restriction.
+  - User has no gallbladder: prefer moderate fat per meal, spread across the day, and prioritize tolerance.
+
+    - Coaching behavior:
+      - For intent PROGRESS or GENERAL: do not default to nutrition. Lead with the most relevant category (movement/sleep/training) unless the user asked about macros or nutrition is clearly the limiting factor.
+      - If proteinRemainingG is provided, anchor guidance in “remaining today” and suggest a realistic pacing across meals (proteinPerMealG), rather than generic meal ranges.
+      - If you mention a next-meal protein amount, use proteinPerMealG directly (a single number), not a range.
+      - Keep it conversational: 1–2 short paragraphs + one practical next step + one follow-up question.
 
 PROFILE (available from HealthKit; use when asked)
 - Age: ${fmt(age)}
@@ -304,11 +355,17 @@ ${wantsQuickLog ? "- User indicates food is already logged; treat intake as curr
 ${isEvening ? "- Time context: evening; prefer light guidance and day‑wrap rather than optimization." : ""}
 ${planningLater ? "- User is planning a later snack; answer directly without follow‑up interrogation." : ""}
 - Net (burned − eaten): ${fmt(netDeficitSoFar)} kcal
-- Protein: ${fmt(dietaryProteinG)} g
+${includeMacroContext ? `- Protein: ${fmt(dietaryProteinG)} g
+- Protein target: ${proteinTargetG != null ? fmt(proteinTargetG, " g") : "—"}
+- Protein remaining: ${proteinRemainingG != null ? fmt(proteinRemainingG, " g") : "—"}
+- Meals left today (estimate): ${mealsLeft}
+- Protein per meal (to finish target): ${proteinPerMealG != null ? fmt(proteinPerMealG, " g") : "—"}
 - Carbs/Fat/Fiber: ${dietaryCarbsG != null ? fmt(dietaryCarbsG) : "—"}/${dietaryFatG != null ? fmt(dietaryFatG) : "—"}/${dietaryFiberG != null ? fmt(dietaryFiberG) : "—"} g
-- Sleep: ${fmt(sleepHours)} h
+- Important: When answering about macros, interpret them as "so far today" and avoid judging balance as final unless user asks for end-of-day planning.
+` : ""}
+    - Sleep: ${fmt(sleepHours)} h
 
-Question: "${question.trim()}"
+${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${chatHistoryText}\n\n` : ""}Question: "${question.trim()}"
 `;
 
     const debugFooter = DEBUG_AI
@@ -382,7 +439,18 @@ Question: "${question.trim()}"
       ],
     });
 
-    const insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
+    let insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
+
+    // Last-resort: strip the common blog-trope protein range if the model emits it.
+    // Use a single, computed number when available.
+    const perMeal = proteinPerMealG != null ? `${proteinPerMealG}g` : "50g";
+    insight = insight
+      // 25–40g / 25-40g / 25 to 40g
+      .replace(/\b25\s*[–-]\s*40\s*g\b/gi, perMeal)
+      .replace(/\b25\s*to\s*40\s*g\b/gi, perMeal)
+      // 25–40 grams / 25-40 grams / 25 to 40 grams
+      .replace(/\b25\s*[–-]\s*40\s*grams?\b/gi, perMeal)
+      .replace(/\b25\s*to\s*40\s*grams?\b/gi, perMeal);
 
     return NextResponse.json({ insight: insight + debugFooter });
 
