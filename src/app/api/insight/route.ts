@@ -134,6 +134,14 @@ export async function POST(req: Request) {
         ? rawPreferences.tone
         : "neutral";
 
+    // Sharpness level (only applies when tone is sharp). Derived from pressure so we don't add UI yet.
+    // 1=Direct (blunt, respectful), 2=Spicy (witty edge), 3=Savage (hard accountability, still not insulting).
+    const sharpnessLevel: 1 | 2 | 3 =
+      tonePreference === "sharp"
+        ? (pressurePreference === 1 ? 1 : pressurePreference === 3 ? 3 : 2)
+        : 1;
+    const sharpnessLabel = sharpnessLevel === 1 ? "DIRECT" : sharpnessLevel === 2 ? "SPICY" : "SAVAGE";
+
     // Trends
     const steps7dAvg = num(rawTrends.steps7dAvg);
     const steps7dAvgUsable = (steps7dAvg != null && steps7dAvg >= 2000) ? steps7dAvg : undefined;
@@ -343,6 +351,7 @@ CONVERSATIONAL STYLE
 - Match the user's emotional energy.
 - Vary phrasing and structure; avoid predictable patterns.
 - If the user did not ask a question, you do not need to ask one back.
+- If Tone is SHARP, follow the SHARPNESS mode (DIRECT/SPICY/SAVAGE) shown in CURRENT SETTINGS.
 
 PERSONALITY
 - You are a calm, witty friend — not a comedian.
@@ -357,6 +366,12 @@ PERSONALITY
 - Keep any reference to ONE short line, then return to the user’s real situation.
 - If a reference doesn’t fit naturally, do not include one.
 
+SHARPNESS (only when Tone is SHARP)
+- DIRECT: concise, blunt, respectful. No fluff. No insults.
+- SPICY: direct + a little witty edge. Light teasing is allowed.
+- SAVAGE: hard accountability. Call out excuses. Still no insults, cruelty, or personal attacks.
+- If the user is tired/sad/stressed, keep sharpness one notch softer.
+
 CONVERSATIONAL RESTRAINT
 - Prioritize reflection over advancement.
 - Validate first. Add advice only if it clearly improves the user’s next decision.
@@ -370,6 +385,7 @@ CONVERSATIONAL RESTRAINT
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
 - Tone: ${tonePreference.toUpperCase()}
+${tonePreference === "sharp" ? `- Sharpness: ${sharpnessLabel}` : ""}
 - Intent: ${intent.toUpperCase()}
 - On track today: ${onTrack ? "YES" : "NO"}
 - Late night: ${isLateNight ? "YES" : "NO"}
