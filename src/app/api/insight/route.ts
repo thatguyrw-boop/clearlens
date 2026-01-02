@@ -202,6 +202,14 @@ export async function POST(req: Request) {
       isProgressCheck ? "progress" :
       "general";
 
+    // Pop culture should be rare and only when it fits (avoid cringe + avoid serious moments)
+    const lowMood = /\b(tired|exhausted|stressed|anxious|pain|hurt|sick|rough|meh|down|depressed)\b/.test(qLower);
+    const allowPopCulture =
+      !lowMood &&
+      (intent === "motivation" || intent === "progress") &&
+      (tonePreference === "sharp" || effectivePressure !== "low") &&
+      Math.random() < 0.2; // ~1 in 5
+
     const includeMacroContext =
       macroWordsRe.test(qLower) ||
       intent === "food" ||
@@ -354,11 +362,11 @@ CONVERSATIONAL STYLE
 - If Tone is SHARP, follow the SHARPNESS mode (DIRECT/SPICY/SAVAGE) shown in CURRENT SETTINGS.
 
 
-PERSONALITY
 - You are a calm, witty friend — not a comedian.
 - Humor is optional and must be subtle. Never force a joke.
+- Avoid generic hype or motivational-poster lines (e.g., "keep that energy going", "crush it", "you've got this") unless the user explicitly asks for motivation.
 - Pop culture references are optional and must never derail the answer.
-- Use pop culture sparingly (about 1 in 5 responses) and only when intent is MOTIVATION, PROGRESS, or CELEBRATION.
+- Use pop culture ONLY when CURRENT SETTINGS says "Pop culture: YES".
 - Avoid stereotypes. Tailor loosely by age cohort (not gender):
   • under 25: modern internet culture (light, non-cringe)
   • 25–34: 2010s references
@@ -391,12 +399,14 @@ CONVERSATIONAL RESTRAINT
   • the user explicitly asks for ideas.
 - Silence after a complete, helpful response is intentional.
 - Ending without a question is confidence, not failure.
+- When giving suggestions, default to ONE strong suggestion (optionally a second). Avoid numbered lists or long option dumps unless the user explicitly asks for options.
 
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
 - Tone: ${tonePreference.toUpperCase()}
 ${tonePreference === "sharp" ? `- Sharpness: ${sharpnessLabel}` : ""}
 - Intent: ${intent.toUpperCase()}
+- Pop culture: ${allowPopCulture ? "YES" : "NO"}
 - On track today: ${onTrack ? "YES" : "NO"}
 - Late night: ${isLateNight ? "YES" : "NO"}
 ${voiceContext}
@@ -521,9 +531,35 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
       if (hasHrv) parts.push(`HRV (SDNN): ${Math.round(hrvSdnn)} ms`);
 
       let note = "";
-      if (hasSleep && sleepHours < 6.5) note = "Sleep is a bit short — take it slightly easier today.";
-      else if (hasSleep) note = "Sleep looks solid — recovery should be decent.";
-      else note = "Recovery looks moderate based on limited data.";
+
+      // Prefer sleep-first reasoning; use baselines when available.
+      const sleepDelta = (sleepHours != null && sleepAvg7d != null) ? (sleepHours - sleepAvg7d) : undefined;
+      const rhrDelta = (restingHeartRate != null && rhrAvg7d != null) ? (restingHeartRate - rhrAvg7d) : undefined;
+
+      if (hasSleep) {
+        if (sleepDelta != null && Number.isFinite(sleepDelta) && sleepDelta <= -0.7) {
+          note = `Sleep was a bit below your usual (${Math.round(sleepAvg7d! * 10) / 10}h avg) — I’d keep intensity lighter today.`;
+        } else if (sleepHours < 6.5) {
+          note = "Sleep is a bit short — take it slightly easier today.";
+        } else {
+          note = "Sleep looks solid — recovery should be decent.";
+        }
+
+        // If HRV is missing, explicitly ground the read in sleep + RHR.
+        if (!hasHrv) {
+          note += " HRV isn’t recorded every day for everyone — I’m leaning on sleep + resting HR.";
+        }
+
+      } else if (hasRhr) {
+        if (rhrDelta != null && Number.isFinite(rhrDelta) && rhrDelta >= 6) {
+          note = "Resting HR is above your recent baseline — that’s often a sign to go easier today.";
+        } else {
+          note = "Recovery looks okay from resting HR.";
+        }
+        if (!hasHrv) note += " (HRV isn’t available today.)";
+      } else {
+        note = "Recovery is hard to judge without sleep or resting HR — tap ⟳ once after Health finishes syncing.";
+      }
 
       const reply = `${parts.join(" • ")}. ${note}`;
       return NextResponse.json({ insight: reply + debugFooter });
