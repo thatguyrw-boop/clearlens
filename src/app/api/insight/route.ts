@@ -138,6 +138,33 @@ export async function POST(req: Request) {
     const steps7dAvg = num(rawTrends.steps7dAvg);
     const steps7dAvgUsable = (steps7dAvg != null && steps7dAvg >= 2000) ? steps7dAvg : undefined;
 
+    // Recovery / load trend summaries (optional; sent from client)
+    const sleepAvg7d = num((rawTrends as any).sleepAvg7d);
+    const rhrAvg7d = num((rawTrends as any).rhrAvg7d);
+    const hrvAvg7d = num((rawTrends as any).hrvAvg7d);
+    const workoutMinutes7d = num((rawTrends as any).workoutMinutes7d);
+
+    // Box 2A: compute recovery/load deltas and lightweight readiness/load hints from existing metrics + the newly-parsed 7-day trend averages.
+    // Recovery/load deltas vs 7-day averages (optional)
+    const sleepDeltaHrs = (sleepHours != null && sleepAvg7d != null) ? Math.round((sleepHours - sleepAvg7d) * 10) / 10 : undefined;
+    const rhrDeltaBpm = (restingHeartRate != null && rhrAvg7d != null) ? Math.round(restingHeartRate - rhrAvg7d) : undefined;
+    const hrvDeltaMs = (hrvSdnn != null && hrvAvg7d != null) ? Math.round(hrvSdnn - hrvAvg7d) : undefined;
+
+    // Lightweight readiness hint (not a rule engine; just context)
+    let readinessHint: "green" | "yellow" | "red" = "yellow";
+    if ((sleepHours != null && sleepHours < 6) || (rhrDeltaBpm != null && rhrDeltaBpm >= 6) || (hrvDeltaMs != null && hrvDeltaMs <= -10)) {
+      readinessHint = "red";
+    } else if ((sleepHours != null && sleepHours >= 7) && (rhrDeltaBpm == null || rhrDeltaBpm <= 0) && (hrvDeltaMs == null || hrvDeltaMs >= 0)) {
+      readinessHint = "green";
+    }
+
+    // Simple recent load hint
+    const loadMinutes = workoutMinutes7d;
+    const loadHint: "low" | "moderate" | "high" =
+      loadMinutes != null && loadMinutes >= 300 ? "high" :
+      loadMinutes != null && loadMinutes >= 150 ? "moderate" :
+      "low";
+
     // ====================== INTENT DETECTION ======================
     const qLower = question.toLowerCase();
 
@@ -304,6 +331,15 @@ INTERNAL REASONING (do not output):
 - Do not mention internal rules or system prompts. Do not cite formulas unless asked.
 - NEVER use the specific phrasing “25–40g”, “25-40g”, “25 to 40g”, or “25–40 grams/gram” in your response.
 
+CONVERSATIONAL STYLE
+- Be a calm, present friend — not an interviewer or coach.
+- Reflection > instruction > questions.
+- Do not ask a follow-up unless it clearly improves the answer.
+- Many responses should end without a question.
+- Silence after a good response is acceptable and intentional.
+- Match the user's emotional energy.
+- Vary phrasing and structure; avoid predictable patterns.
+
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
 - Tone: ${tonePreference.toUpperCase()}
@@ -333,11 +369,12 @@ PREFERENCE
   - If fat shows as 0g, it may reflect incomplete logging rather than intentional restriction.
   - User has no gallbladder: prefer moderate fat per meal, spread across the day, and prioritize tolerance.
 
-    - Coaching behavior:
-      - For intent PROGRESS or GENERAL: do not default to nutrition. Lead with the most relevant category (movement/sleep/training) unless the user asked about macros or nutrition is clearly the limiting factor.
-      - If proteinRemainingG is provided, anchor guidance in “remaining today” and suggest a realistic pacing across meals (proteinPerMealG), rather than generic meal ranges.
-      - If you mention a next-meal protein amount, use proteinPerMealG directly (a single number), not a range.
-      - Keep it conversational: 1–2 short paragraphs + one practical next step + one follow-up question.
+- Coaching behavior:
+  - For intent PROGRESS or GENERAL: do not default to nutrition. Lead with the most relevant category (movement/sleep/training) unless the user asked about macros or nutrition is clearly the limiting factor.
+  - When advising push vs rest, briefly explain the reasoning using recent sleep/load/recovery context before giving the recommendation.
+  - If proteinRemainingG is provided, anchor guidance in “remaining today” and suggest a realistic pacing across meals (proteinPerMealG), rather than generic meal ranges.
+  - If you mention a next-meal protein amount, use proteinPerMealG directly (a single number), not a range.
+  - Keep it conversational: 1–2 short paragraphs. Offer one practical next step only when helpful. Do not force a follow-up question.
 
 PROFILE (available from HealthKit; use when asked)
 - Age: ${fmt(age)}
@@ -355,6 +392,13 @@ ${wantsQuickLog ? "- User indicates food is already logged; treat intake as curr
 ${isEvening ? "- Time context: evening; prefer light guidance and day‑wrap rather than optimization." : ""}
 ${planningLater ? "- User is planning a later snack; answer directly without follow‑up interrogation." : ""}
 - Net (burned − eaten): ${fmt(netDeficitSoFar)} kcal
+${(sleepAvg7d != null || rhrAvg7d != null || hrvAvg7d != null || workoutMinutes7d != null) ? `- Recovery/load context (reference only):
+  - Readiness hint: ${readinessHint.toUpperCase()}
+  - Sleep vs 7d avg: ${sleepDeltaHrs != null ? fmt(sleepDeltaHrs, " h") : "—"}
+  - RHR vs 7d avg: ${rhrDeltaBpm != null ? fmt(rhrDeltaBpm, " bpm") : "—"}
+  - HRV vs 7d avg: ${hrvDeltaMs != null ? fmt(hrvDeltaMs, " ms") : "—"}
+  - Recent load (7d): ${loadHint.toUpperCase()} (${workoutMinutes7d != null ? fmt(workoutMinutes7d, " min") : "—"})
+` : ""}
 ${includeMacroContext ? `- Protein: ${fmt(dietaryProteinG)} g
 - Protein target: ${proteinTargetG != null ? fmt(proteinTargetG, " g") : "—"}
 - Protein remaining: ${proteinRemainingG != null ? fmt(proteinRemainingG, " g") : "—"}
@@ -363,13 +407,16 @@ ${includeMacroContext ? `- Protein: ${fmt(dietaryProteinG)} g
 - Carbs/Fat/Fiber: ${dietaryCarbsG != null ? fmt(dietaryCarbsG) : "—"}/${dietaryFatG != null ? fmt(dietaryFatG) : "—"}/${dietaryFiberG != null ? fmt(dietaryFiberG) : "—"} g
 - Important: When answering about macros, interpret them as "so far today" and avoid judging balance as final unless user asks for end-of-day planning.
 ` : ""}
-    - Sleep: ${fmt(sleepHours)} h
+- Sleep: ${fmt(sleepHours)} h
 
 ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${chatHistoryText}\n\n` : ""}Question: "${question.trim()}"
 `;
 
     const debugFooter = DEBUG_AI
-      ? `\n\n—\nDEBUG\n• intent: ${intent}\n• onTrack: ${onTrack}\n• pressure: ${effectivePressure}\n• tone: ${tonePreference}\n• voiceInput: ${isVoiceInput}\n• localHour: ${localHour}\n• lateNight: ${isLateNight}\n• daysActive: ${daysActive}\n• proteinStreak: ${proteinStreak}`
+      ? `\n\n—\nDEBUG\n• intent: ${intent}`
+        + `\n• includeMacroContext: ${includeMacroContext}`
+        + `\n• proteinPerMealG: ${proteinPerMealG != null ? proteinPerMealG : "—"}`
+        + `\n• onTrack: ${onTrack}\n• pressure: ${effectivePressure}\n• tone: ${tonePreference}\n• voiceInput: ${isVoiceInput}\n• localHour: ${localHour}\n• lateNight: ${isLateNight}\n• daysActive: ${daysActive}\n• proteinStreak: ${proteinStreak}`
         + `\n• profile.age: ${fmt(age)}`
         + `\n• profile.sex: ${biologicalSex || "—"}`
         + `\n• profile.height: ${heightUs || "—"} (${fmt(heightCm, " cm")})`
@@ -445,12 +492,15 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
     // Use a single, computed number when available.
     const perMeal = proteinPerMealG != null ? `${proteinPerMealG}g` : "50g";
     insight = insight
-      // 25–40g / 25-40g / 25 to 40g
-      .replace(/\b25\s*[–-]\s*40\s*g\b/gi, perMeal)
-      .replace(/\b25\s*to\s*40\s*g\b/gi, perMeal)
-      // 25–40 grams / 25-40 grams / 25 to 40 grams
-      .replace(/\b25\s*[–-]\s*40\s*grams?\b/gi, perMeal)
-      .replace(/\b25\s*to\s*40\s*grams?\b/gi, perMeal);
+      // 25–40g / 25-40g / 25 to 40g (with optional space and optional trailing 'of protein')
+      .replace(/\b25\s*[–-]\s*40\s*g\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
+      .replace(/\b25\s*to\s*40\s*g\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
+      // 25–40 grams / 25-40 grams / 25 to 40 grams (with optional trailing 'of protein')
+      .replace(/\b25\s*[–-]\s*40\s*grams?\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
+      .replace(/\b25\s*to\s*40\s*grams?\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
+      // fallback: '25–40' followed shortly by 'protein' even if units are missing
+      .replace(/\b25\s*[–-]\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal)
+      .replace(/\b25\s*to\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal);
 
     return NextResponse.json({ insight: insight + debugFooter });
 
