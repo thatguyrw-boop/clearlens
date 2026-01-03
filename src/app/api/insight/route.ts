@@ -519,19 +519,20 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     const lastAssistantText = String(lastAssistantMsg ?? "");
 
     // Step 1: Treat tiny reactions as replies to the last assistant message (banter, no pivot)
-    const isReactionMessage = /^(meh|hmm+|hmmm+|ok|okay|lol|lmao|boo|nah|eh|mid)$/i.test(qTrim);
+    // Tiny reactions / acknowledgements we should treat as direct replies to the last assistant message
+    const isReactionMessage = /^(meh|mid|boo|nah|eh|hmm+|hmmm+|ok|okay|lol|lmao|haha+|ha\b|nice|good one|fair|touch[eé]|you got me|got me|dang|oof)$/i.test(qTrim);
 
     if (isReactionMessage && lastAssistantText) {
       const lastWasRoast = /\b(roast|olympic|marathon|snack|steps|buffet|training|gym|walk)\b/i.test(lastAssistantText);
-
+      const neg = /\b(meh|mid|nah|boo|eh)\b/i.test(qTrim);
       if (lastWasRoast) {
-        insight = /meh|mid|nah|boo/i.test(qTrim)
+        insight = neg
           ? "Fair. That one was mid. I’ll do better."
-          : "That tracks. Not my best hit.";
+          : "That tracks.";
       } else {
-        insight = "That tracks.";
+        // Non-roast last message: keep it short and in-character
+        insight = neg ? "Fair." : "That tracks.";
       }
-
       return NextResponse.json({ insight: insight + debugFooter });
     }
 
