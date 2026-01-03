@@ -514,6 +514,23 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     const lastAssistantMsg = [...chatHistory].slice().reverse().find((m: any) => (m?.role === "assistant"))?.text;
     const lastAssistantText = String(lastAssistantMsg ?? "");
 
+    // Step 1: Treat tiny reactions as replies to the last assistant message (banter, no pivot)
+    const isReactionMessage = /^(meh|hmm+|hmmm+|ok|okay|lol|lmao|boo|nah|eh|mid)$/i.test(qTrim);
+
+    if (isReactionMessage && lastAssistantText) {
+      const lastWasRoast = /\b(roast|olympic|marathon|snack|steps|buffet|training|gym|walk)\b/i.test(lastAssistantText);
+
+      if (lastWasRoast) {
+        insight = /meh|mid|nah|boo/i.test(qTrim)
+          ? "Fair. That one was mid. I’ll do better."
+          : "That tracks. Not my best hit.";
+      } else {
+        insight = "That tracks.";
+      }
+
+      return NextResponse.json({ insight: insight + debugFooter });
+    }
+
     // Ban corny / blog phrases even if the model slips
     insight = insight
       .replace(/\bno small feat\b/gi, "")
