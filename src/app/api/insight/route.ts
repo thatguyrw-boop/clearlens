@@ -603,6 +603,23 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
         .replace(/\?\s*$/g, "")
         .trim();
 
+      // If our stripping leaves only a preamble (or empties the roast), generate a fresh 1–2 line roast.
+      const tooShort = insight.replace(/\s+/g, " ").trim().length < 35;
+      const preambleOnly = /^\s*(let’s be real\.|lets be real\.|alright[,!]?\s*(here we go|here goes)?[:.!]?|ok[,!]?\s*)\s*$/i.test(insight.trim());
+      if (tooShort || preambleOnly) {
+        const s = steps != null ? Math.round(steps) : undefined;
+        const deficit = netDeficitSoFar;
+        const protLeft = proteinRemainingG;
+        const prot = dietaryProteinG;
+        // Keep it punchy, avoid starting with "You've".
+        const parts: string[] = [];
+        if (s != null) parts.push(`you’re at ~${s.toLocaleString()} steps`);
+        if (deficit != null) parts.push(`a ~${Math.abs(deficit).toLocaleString()} kcal ${deficit >= 0 ? "deficit" : "surplus"}`);
+        if (protLeft != null && prot != null) parts.push(`${protLeft}g protein left (you’re at ${Math.round(prot)}g)`);
+        const detail = parts.length ? parts.join(", ") : "today";
+        insight = `Let’s be real. ${detail} — and you’re still acting surprised you feel cooked.`;
+      }
+
       // If the roast starts with template openers, strip them and lead with a signature phrase.
       if (/^\s*(alright|okay|you\s*'?ve|you\s+have|you\s+are|you\s+had|you\s+hit|you\s*'?ve\s+got)\b/i.test(insight)) {
         insight = "Let’s be real. " + insight.replace(/^\s*(alright|okay)(,|\:)?\s*(here\s+goes\:?)?\s*/i, "").replace(/^\s*(you\s*'?ve\s+got|you\s*'?ve\s+been|you\s+have|you\s+are|you\s+had|you\s+hit)\b\s*[:,—-]?\s*/i, "").trim();
