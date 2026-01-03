@@ -347,8 +347,10 @@ NON-NEGOTIABLES
 - Avoid blog/coach filler. Keep it tight.
 
 VOICE TEXTURE (use naturally, not every time)
-- Signature phrases: “That tracks.” “No shame.” “Let’s be real.”
-- Vary openers; avoid repeating the same opener across nearby replies.
+- Signature phrases (sprinkle, not spam): “That tracks.” “No shame.” “Let’s be real.”
+- Anti-template repetition: avoid starting multiple replies with the same opener (“You’ve”, “With”, “If you…”, “Just checking…”, “Alright, here goes…”).
+  - Don’t reuse an opener used in the last 2 assistant messages.
+- Hard opener ban: do NOT start any reply with “You’ve got”.
 
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
@@ -376,6 +378,7 @@ ${includeMacroContext ? `- Macros so far: Protein ${fmt(dietaryProteinG)}g (targ
 
 REPLY FORMAT
 - Prefer 1–2 short paragraphs.
+- Default endings: a complete thought (no question) unless the user is planning/choosing or explicitly asked a question.
 - Choose ONE mode per reply: INFORMATION (facts), REFLECTION (validate), GUIDANCE (one next step), or BANTER (one line, only if Pop culture: YES).
 
 ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chatHistoryText}\n\n` : ""}User message: "${question.trim()}"
@@ -522,6 +525,7 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       .replace(/\bcrushing it\b/gi, "")
       .replace(/\byou\s*'?ve\s*got\s*this\b/gi, "")
       .replace(/\bkeep pushing through\b/gi, "")
+      .replace(/^\s*I get that\.?\s*/i, "That tracks. ")
       .trim();
 
     // If user gave a quick statement (not a question), force reflection-only and stop.
@@ -550,9 +554,9 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     }
 
     // Hard opener ban: if it starts with common template openers, rewrite the opener.
-    if (/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b/i.test(insight)) {
+    if (/^\s*(i\s+get\s+that|i\s+hear\s+you|you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b/i.test(insight)) {
       insight = "That tracks. " + insight
-        .replace(/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b\s*[:,—-]?\s*/i, "")
+        .replace(/^\s*(i\s+get\s+that|i\s+hear\s+you|you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b\s*[:,—-]?\s*/i, "")
         .trim();
     }
 
@@ -576,6 +580,11 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
         .replace(/\b(but hey|but seriously|just remember|remember|at least|seriously|in all seriousness)\b[\s\S]*/i, "")
         .replace(/\?\s*$/g, "")
         .trim();
+
+      // If the roast starts with template openers, strip them and lead with a signature phrase.
+      if (/^\s*(alright|okay|you\s*'?ve|you\s+have|you\s+are|you\s+had|you\s+hit|you\s*'?ve\s+got)\b/i.test(insight)) {
+        insight = "Let’s be real. " + insight.replace(/^\s*(alright|okay)(,|\:)?\s*(here\s+goes\:?)?\s*/i, "").replace(/^\s*(you\s*'?ve\s+got|you\s*'?ve\s+been|you\s+have|you\s+are|you\s+had|you\s+hit)\b\s*[:,—-]?\s*/i, "").trim();
+      }
 
       // Keep max 2 lines
       const lines = insight.split(/\n+/).map(l => l.trim()).filter(Boolean);
