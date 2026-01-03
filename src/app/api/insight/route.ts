@@ -650,6 +650,16 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
     const userAskedAQuestion = /\?\s*$/.test(question.trim());
     const isRoastRequest = /\broast me\b/.test(qLower) || (/\bdo your worst\b|\bkick my ass\b|\bbe harsh\b/.test(qLower) && tonePreference === "sharp");
 
+    // Helper values for short statement/quick reflection mode
+    const qTrim = question.trim();
+    const isShortStatement = qTrim.length <= 18 && !/\b(what|how|why|should|can you|could you|help|suggest|recommend|ideas|options)\b/i.test(qTrim);
+    const isKnownQuickStatement = /^(sup|hey|yo|meh|long day|snack day|tired|i\s*'?m\s*beat|im\s*beat|i\s*'?m\s*tired)$/i.test(qTrim);
+    const shouldForceReflectionOnly = !userAskedAQuestion && (isShortStatement || isKnownQuickStatement) && !isRoastRequest;
+
+    // Grab the most recent assistant message to avoid repeating the same roast hook
+    const lastAssistantMsg = [...chatHistory].slice().reverse().find((m: any) => (m?.role === "assistant"))?.text;
+    const lastAssistantText = String(lastAssistantMsg ?? "");
+
     // Ban corny / blog phrases even if the model slips
     insight = insight
       .replace(/\bno small feat\b/gi, "")
@@ -663,6 +673,18 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
       .replace(/\bkeep pushing through\b/gi, "")
       .trim();
 
+    // If user gave a quick statement (not a question), force reflection-only and stop.
+    if (shouldForceReflectionOnly) {
+      // Keep only the first sentence/line and remove suggestion-y openers like "How about..."
+      const firstSentence = insight.split(/(?<=[.!])\s+/)[0] || insight;
+      insight = firstSentence
+        .replace(/\b(how about|maybe|you might want to|consider)\b[\s\S]*/i, "")
+        .trim();
+
+      // If it became empty after trimming, fall back to a simple acknowledgement.
+      if (!insight) insight = "That tracks.";
+    }
+
     // Hard opener ban: if it starts with "You’ve got/You have/You are/With ... left", rewrite the opener.
     if (/^\s*(you\s*'?ve\s*got|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)/i.test(insight)) {
       insight = "That tracks. " + insight.replace(/^\s*(you\s*'?ve\s*got|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)\s*[:,—-]?\s*/i, "");
@@ -670,6 +692,13 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
 
     // ROAST MODE: one punch only (1–2 lines), no softening after ("but hey", "just remember", etc.)
     if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
+      // Prevent repeating the same roast hook from the last assistant message (e.g., "Olympic")
+      if (/\bOlympic\b/i.test(lastAssistantText) && /\bOlympic\b/i.test(insight)) {
+        insight = insight.replace(/\bOlympic\b/gi, "Fitbit");
+      }
+      if (/\bwhere\s*'?s\s*my\s*snack\b/i.test(lastAssistantText) && /\bwhere\s*'?s\s*my\s*snack\b/i.test(insight)) {
+        insight = insight.replace(/where\s*'?s\s*my\s*snack/gi, "snack radar");
+      }
       insight = insight
         .replace(/\b(but hey|just remember|at least|seriously|in all seriousness)\b[\s\S]*/i, "")
         .replace(/\?\s*$/g, "")
