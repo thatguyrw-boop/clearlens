@@ -202,39 +202,6 @@ export async function POST(req: Request) {
       isProgressCheck ? "progress" :
       "general";
 
-    // ====================== EFFECTIVE PRESSURE ======================
-    let effectivePressure: "low" | "medium" | "high" =
-      pressurePreference === 1 ? "low" :
-      pressurePreference === 3 ? "high" :
-      "medium";
-
-    if (lastFeedback === "too_much_pressure") {
-      effectivePressure = effectivePressure === "high" ? "medium" : "low";
-    }
-
-    if (intent === "numbers" || intent === "meta_feedback" || (onTrack && intent !== "motivation")) {
-      effectivePressure = "low";
-    } else if (onTrack && effectivePressure === "high") {
-      effectivePressure = "medium";
-    }
-
-    // Pop culture should be rare and only when it fits (avoid cringe + avoid serious moments)
-    const lowMood = /\b(tired|exhausted|stressed|anxious|pain|hurt|sick|rough|meh|down|depressed)\b/.test(qLower);
-    const allowPopCulture =
-      !lowMood &&
-      (intent === "motivation" || intent === "progress") &&
-      (tonePreference === "sharp" || effectivePressure !== "low") &&
-      Math.random() < 0.35; // ~1 in 3
-
-    const includeMacroContext =
-      macroWordsRe.test(qLower) ||
-      intent === "food" ||
-      wantsQuickLog ||
-      likelyUnlogged;
-
-    const isProfileQuery = /\b(do you know|what\s*'s|what is|tell me)\b.*\b(height|weight|age)\b/.test(qLower);
-    const isRecoveryQuery = /\b(recovery|readiness|sleep|hrv|sdnn|resting\s*hr|rhr|resting heart)\b/.test(qLower);
-
     // ====================== ON-TRACK ASSESSMENT ======================
     const movementOk = steps != null ? (steps7dAvg ? steps >= steps7dAvg * 0.8 : steps >= 6000) : true;
     const sleepOk = sleepHours != null ? sleepHours >= 6.5 : true;
@@ -270,6 +237,39 @@ export async function POST(req: Request) {
     const workoutTimePref = (memories.workout_time_pref as string) || null;
     const goal = (memories.goal as string) || null;
     const lastFeedback = (memories.last_feedback as string) || null;
+
+    // ====================== EFFECTIVE PRESSURE ======================
+    let effectivePressure: "low" | "medium" | "high" =
+      pressurePreference === 1 ? "low" :
+      pressurePreference === 3 ? "high" :
+      "medium";
+
+    if (lastFeedback === "too_much_pressure") {
+      effectivePressure = effectivePressure === "high" ? "medium" : "low";
+    }
+
+    if (intent === "numbers" || intent === "meta_feedback" || (onTrack && intent !== "motivation")) {
+      effectivePressure = "low";
+    } else if (onTrack && effectivePressure === "high") {
+      effectivePressure = "medium";
+    }
+
+    // Pop culture should be rare and only when it fits (avoid cringe + avoid serious moments)
+    const lowMood = /\b(tired|exhausted|stressed|anxious|pain|hurt|sick|rough|meh|down|depressed)\b/.test(qLower);
+    const allowPopCulture =
+      !lowMood &&
+      (intent === "motivation" || intent === "progress") &&
+      (tonePreference === "sharp" || effectivePressure !== "low") &&
+      Math.random() < 0.35; // ~1 in 3
+
+    const includeMacroContext =
+      macroWordsRe.test(qLower) ||
+      intent === "food" ||
+      wantsQuickLog ||
+      likelyUnlogged;
+
+    const isProfileQuery = /\b(do you know|what\s*'s|what is|tell me)\b.*\b(height|weight|age)\b/.test(qLower);
+    const isRecoveryQuery = /\b(recovery|readiness|sleep|hrv|sdnn|resting\s*hr|rhr|resting heart)\b/.test(qLower);
 
     // ====================== ASYNC MEMORY UPDATE ======================
     (async () => {
@@ -549,16 +549,24 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       }
     }
 
-    // Hard opener ban: if it starts with "You’ve got/You've been/You have/You are/With ... left", rewrite the opener.
-    if (/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)/i.test(insight)) {
-      insight = "That tracks. " + insight.replace(/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)\s*[:,—-]?\s*/i, "");
+    // Hard opener ban: if it starts with common template openers, rewrite the opener.
+    if (/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b/i.test(insight)) {
+      insight = "That tracks. " + insight
+        .replace(/^\s*(you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b\s*[:,—-]?\s*/i, "")
+        .trim();
     }
 
     // ROAST MODE: one punch only (1–2 lines), no softening after ("but hey", "just remember", etc.)
     if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
-      // Prevent repeating the same roast hook from the last assistant message (e.g., "Olympic")
+      // Prevent repeating the same roast hook from the last assistant message
       if (/\bOlympic\b/i.test(lastAssistantText) && /\bOlympic\b/i.test(insight)) {
         insight = insight.replace(/\bOlympic\b/gi, "Fitbit");
+      }
+      if (/\bmarathon\b/i.test(lastAssistantText) && /\bmarathon\b/i.test(insight)) {
+        insight = insight.replace(/\bmarathon\b/gi, "hot-lap");
+      }
+      if (/\btraining\s+for\s+a\s+marathon\b/i.test(lastAssistantText) && /\btraining\s+for\s+a\s+marathon\b/i.test(insight)) {
+        insight = insight.replace(/training\s+for\s+a\s+marathon/gi, "auditioning for a cardio documentary");
       }
       if (/\bwhere\s*'?s\s*my\s*snack\b/i.test(lastAssistantText) && /\bwhere\s*'?s\s*my\s*snack\b/i.test(insight)) {
         insight = insight.replace(/where\s*'?s\s*my\s*snack/gi, "snack radar");
