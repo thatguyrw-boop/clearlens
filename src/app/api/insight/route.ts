@@ -506,8 +506,12 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
 
     // Helper values for short statement/quick reflection mode
     const qTrim = question.trim();
-    const isShortStatement = qTrim.length <= 18 && !/\b(what|how|why|should|can you|could you|help|suggest|recommend|ideas|options)\b/i.test(qTrim);
-    const isKnownQuickStatement = /^(sup|hey|yo|meh|long day|snack day|gonna be a snack day|gonna be snack day|snack day honestly|total snack day|tired|i\s*'?m\s*beat|im\s*beat|i\s*'?m\s*tired|im\s*tired)$/i.test(qTrim);
+    const isShortStatement = qTrim.length <= 22 && !/\b(what|how|why|should|can you|could you|help|suggest|recommend|ideas|options)\b/i.test(qTrim);
+    const isGreeting = /^(sup|hey|yo|hello|hi)\b[\s!.]*$/i.test(qTrim);
+    const isKnownQuickStatement = (
+      isGreeting ||
+      /^(meh|hmm+|hmmm+|ok|okay|lol|lmao|boo|nah|eh|mid|long day|snack day|gonna be a snack day|gonna be snack day|snack day honestly|total snack day|tired|i\s*'?m\s*beat|im\s*beat|i\s*'?m\s*tired|im\s*tired)$/i.test(qTrim)
+    );
     const shouldForceReflectionOnly = !userAskedAQuestion && (isShortStatement || isKnownQuickStatement) && !isRoastRequest;
 
     // Grab the most recent assistant message to avoid repeating the same roast hook
@@ -549,7 +553,7 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     if (shouldForceReflectionOnly) {
       // Hard reflection-only mode: 1 short line, no advice, no questions.
       const qt = qTrim.toLowerCase();
-      if (/^(sup|yo|hey)$/.test(qt)) {
+      if (/^(sup|yo|hey|hello|hi)\b/.test(qt)) {
         insight = "Sup.";
       } else if (/^(meh)$/.test(qt)) {
         insight = "That tracks.";
@@ -616,7 +620,13 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     // Remove any sentence that ends with a question mark.
     if (!userAskedAQuestion) {
       const parts = insight.split(/(?<=[.!?])\s+/).filter(Boolean);
-      const kept = parts.filter(s => !/\?\s*$/.test(s.trim()));
+      const kept = parts.filter(s => {
+        const t = s.trim();
+        if (/\?\s*$/.test(t)) return false;
+        // Also drop implied questions even if the '?' got stripped earlier.
+        if (/^(how|what|why|should|can|could|would)\b/i.test(t)) return false;
+        return true;
+      });
       insight = (kept.length ? kept.join(" ") : insight.replace(/\?+/g, "")).trim();
       // As a final guard, remove any trailing question mark.
       insight = insight.replace(/\?\s*$/g, "").trim();
