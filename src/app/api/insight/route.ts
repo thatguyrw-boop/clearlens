@@ -202,21 +202,6 @@ export async function POST(req: Request) {
       isProgressCheck ? "progress" :
       "general";
 
-    // ====================== EFFECTIVE PRESSURE ======================
-    let effectivePressure: "low" | "medium" | "high" =
-      pressurePreference === 1 ? "low" :
-      pressurePreference === 3 ? "high" :
-      "medium";
-
-    if (lastFeedback === "too_much_pressure") {
-      effectivePressure = effectivePressure === "high" ? "medium" : "low";
-    }
-
-    if (intent === "numbers" || intent === "meta_feedback" || (onTrack && intent !== "motivation")) {
-      effectivePressure = "low";
-    } else if (onTrack && effectivePressure === "high") {
-      effectivePressure = "medium";
-    }
 
     // Pop culture should be rare and only when it fits (avoid cringe + avoid serious moments)
     const lowMood = /\b(tired|exhausted|stressed|anxious|pain|hurt|sick|rough|meh|down|depressed)\b/.test(qLower);
@@ -421,6 +406,14 @@ CONVERSATIONAL RESTRAINT
 - Silence after a complete, helpful response is intentional.
 - Ending without a question is confidence, not failure.
 - When giving suggestions, default to ONE strong suggestion (optionally a second). Avoid numbered lists or long option dumps unless the user explicitly asks for options.
+
+PRIMARY MODE SELECTION (pick ONE per response)
+- Choose exactly one mode unless the user explicitly asks for both:
+  1) REFLECTION: validate/normalize only. No advice. No question.
+  2) GUIDANCE: one practical next step. Minimal empathy. No extra questions.
+  3) INFORMATION: facts/metrics only. No coaching language.
+  4) BANTER: one short playful line (allowed only if Pop culture: YES), then stop.
+- Do not blend REFLECTION + GUIDANCE in the same response.
 
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
