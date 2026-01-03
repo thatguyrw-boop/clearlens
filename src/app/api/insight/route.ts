@@ -178,7 +178,9 @@ export async function POST(req: Request) {
 
     const isMetaFeedback = /\b(why are you|too harsh|too repetitive|stop roasting|same answers|feedback)\b/.test(qLower);
     const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
-    const isFoodQuestion = /\b(what should i eat|dinner|lunch|snack|chicken|steak|shrimp|tacos|pizza|dessert|menu|burrito|lasagna|pasta)\b/.test(qLower);
+    // Food intent should mean the user is asking for food guidance (not just mentioning food).
+    const isFoodPlanningQuestion = /\b(what should i eat|what do i eat|what to eat|suggest|recommend|any room for dessert|dessert\??|should i eat|what would you suggest|from\s+(chick\-?fil\-?a|taco bell|chipotle|mcdonald'?s|starbucks)|menu)\b/.test(qLower);
+    const isFoodMention = /\b(dinner|lunch|snack|popcorn|pizza|dessert|burrito|lasagna|pasta|breakfast)\b/.test(qLower);
 
     const mentionsUnloggedFood = /\b(had|ate|just ate|just had|i had|i ate|burrito|lasagna|pizza|pasta|dessert)\b/.test(qLower);
     const likelyUnlogged = mentionsUnloggedFood && (dietaryCalories == null || dietaryCalories < 800);
@@ -197,7 +199,7 @@ export async function POST(req: Request) {
       isMetaFeedback ? "meta_feedback" :
       (isNumbersRequest && isMotivationRequest) ? "motivation" :
       isNumbersRequest ? "numbers" :
-      isFoodQuestion ? "food" :
+      isFoodPlanningQuestion ? "food" :
       isMotivationRequest ? "motivation" :
       isProgressCheck ? "progress" :
       "general";
@@ -264,7 +266,7 @@ export async function POST(req: Request) {
 
     const includeMacroContext =
       macroWordsRe.test(qLower) ||
-      intent === "food" ||
+      isFoodPlanningQuestion ||
       wantsQuickLog ||
       likelyUnlogged;
 
@@ -521,11 +523,8 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
 
     // ROAST MODE: one punch only (1–2 lines), no softening after ("but hey", "just remember", etc.)
     if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
-      insight = insight
-        // hard-stop anything after common softening pivots
-        .replace(/\b(but hey|but seriously|just remember|remember|at least|seriously|in all seriousness)\b[\s\S]*/i, "")
-        .replace(/\?\s*$/g, "")
-        .trim();
+      // Keep roast content but avoid trailing question marks.
+      insight = insight.replace(/\?\s*$/g, "").trim();
 
       // If our stripping leaves only a preamble (or empties the roast), generate a fresh 1–2 line roast.
       const tooShort = insight.replace(/\s+/g, " ").trim().length < 35;
@@ -544,10 +543,6 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
         insight = `Let’s be real. ${detail} — and you’re still acting surprised you feel cooked.`;
       }
 
-      // If the roast starts with template openers, strip them and lead with a signature phrase.
-      if (/^\s*(alright|okay|you\s*'?ve|you\s+have|you\s+are|you\s+had|you\s+hit|you\s*'?ve\s+got)\b/i.test(insight)) {
-        insight = "Let’s be real. " + insight.replace(/^\s*(alright|okay)(,|\:)?\s*(here\s+goes\:?)?\s*/i, "").replace(/^\s*(you\s*'?ve\s+got|you\s*'?ve\s+been|you\s+have|you\s+are|you\s+had|you\s+hit)\b\s*[:,—-]?\s*/i, "").trim();
-      }
 
       // Keep max 2 lines
       const lines = insight.split(/\n+/).map(l => l.trim()).filter(Boolean);
