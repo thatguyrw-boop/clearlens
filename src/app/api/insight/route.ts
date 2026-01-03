@@ -622,6 +622,14 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       insight = insight.replace(/\?\s*$/g, "").trim();
     }
 
+    // Final hard opener ban (enforced): never start a reply with "You've got" / "You've been" / "You have".
+    // (Prompt-level bans aren't sufficient; we normalize here to keep the voice consistent.)
+    if (/^\s*you\s*['’]?ve\s+(got|been)\b/i.test(insight) || /^\s*you\s+have\b/i.test(insight)) {
+      insight = "Let’s be real. " + insight
+        .replace(/^\s*you\s*['’]?ve\s+(got|been)\b\s*[:,—-]?\s*/i, "")
+        .replace(/^\s*you\s+have\b\s*[:,—-]?\s*/i, "")
+        .trim();
+    }
     return NextResponse.json({ insight: insight + debugFooter });
 
   } catch (error: any) {
