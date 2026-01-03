@@ -646,6 +646,49 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not repeat verbatim)\n${cha
       .replace(/\b25\s*[–-]\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal)
       .replace(/\b25\s*to\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal);
 
+    // ===== Voice guardrails (hard enforcement) =====
+    const userAskedAQuestion = /\?\s*$/.test(question.trim());
+    const isRoastRequest = /\broast me\b/.test(qLower) || (/\bdo your worst\b|\bkick my ass\b|\bbe harsh\b/.test(qLower) && tonePreference === "sharp");
+
+    // Ban corny / blog phrases even if the model slips
+    insight = insight
+      .replace(/\bno small feat\b/gi, "")
+      .replace(/\bsweet spot\b/gi, "")
+      .replace(/\bkeep it balanced\b/gi, "")
+      .replace(/\bmix things up\b/gi, "")
+      .replace(/\bit'?s all about\b[^.?!]*[.?!]?/gi, "")
+      .replace(/\bkeep that momentum going\b/gi, "")
+      .replace(/\bcrushing it\b/gi, "")
+      .replace(/\byou\s*'?ve\s*got\s*this\b/gi, "")
+      .replace(/\bkeep pushing through\b/gi, "")
+      .trim();
+
+    // Hard opener ban: if it starts with "You’ve got/You have/You are/With ... left", rewrite the opener.
+    if (/^\s*(you\s*'?ve\s*got|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)/i.test(insight)) {
+      insight = "That tracks. " + insight.replace(/^\s*(you\s*'?ve\s*got|you\s+have|you\s+are|with\b[^\n]{0,40}\bleft)\s*[:,—-]?\s*/i, "");
+    }
+
+    // ROAST MODE: one punch only (1–2 lines), no softening after ("but hey", "just remember", etc.)
+    if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
+      insight = insight
+        .replace(/\b(but hey|just remember|at least|seriously|in all seriousness)\b[\s\S]*/i, "")
+        .replace(/\?\s*$/g, "")
+        .trim();
+
+      // Keep max 2 lines
+      const lines = insight.split(/\n+/).map(l => l.trim()).filter(Boolean);
+      insight = lines.slice(0, 2).join("\n");
+
+      // If still long, keep first 2 sentences max
+      const sentences = insight.split(/(?<=[.!])\s+/).filter(Boolean);
+      insight = sentences.slice(0, 2).join(" ").trim();
+    }
+
+    // If user did not ask a question, do not force one back (strip trailing question as a last resort)
+    if (!userAskedAQuestion) {
+      insight = insight.replace(/\?\s*$/g, "").trim();
+    }
+
     return NextResponse.json({ insight: insight + debugFooter });
 
   } catch (error: any) {
