@@ -202,13 +202,29 @@ export async function POST(req: Request) {
       isProgressCheck ? "progress" :
       "general";
 
+    // ====================== EFFECTIVE PRESSURE ======================
+    let effectivePressure: "low" | "medium" | "high" =
+      pressurePreference === 1 ? "low" :
+      pressurePreference === 3 ? "high" :
+      "medium";
+
+    if (lastFeedback === "too_much_pressure") {
+      effectivePressure = effectivePressure === "high" ? "medium" : "low";
+    }
+
+    if (intent === "numbers" || intent === "meta_feedback" || (onTrack && intent !== "motivation")) {
+      effectivePressure = "low";
+    } else if (onTrack && effectivePressure === "high") {
+      effectivePressure = "medium";
+    }
+
     // Pop culture should be rare and only when it fits (avoid cringe + avoid serious moments)
     const lowMood = /\b(tired|exhausted|stressed|anxious|pain|hurt|sick|rough|meh|down|depressed)\b/.test(qLower);
     const allowPopCulture =
       !lowMood &&
       (intent === "motivation" || intent === "progress") &&
       (tonePreference === "sharp" || effectivePressure !== "low") &&
-      Math.random() < 0.2; // ~1 in 5
+      Math.random() < 0.35; // ~1 in 3
 
     const includeMacroContext =
       macroWordsRe.test(qLower) ||
@@ -350,7 +366,7 @@ INTERNAL REASONING (do not output):
 
 
 
-CONVERSATIONAL STYLE
+-CONVERSATIONAL STYLE
 - Be a calm, present friend — not an interviewer or coach.
 - Reflection > instruction > questions.
 - Do not ask a follow-up unless it clearly improves the answer.
@@ -358,6 +374,11 @@ CONVERSATIONAL STYLE
 - Silence after a good response is acceptable and intentional.
 - Match the user's emotional energy.
 - Vary phrasing and structure; avoid predictable patterns.
+- Language texture:
+  - Avoid repeatedly starting responses with “It sounds like…”, “That sounds like…”, or “It seems like…”.
+  - Do not use those phrases at all unless quoting the user.
+  - Prefer natural openers such as: “Yeah.” “Totally.” “That tracks.” “I get that.” “Makes sense.”
+  - Vary sentence length; occasional short fragments are okay.
 - If the user did not ask a question, you do not need to ask one back.
 - If Tone is SHARP, follow the SHARPNESS mode (DIRECT/SPICY/SAVAGE) shown in CURRENT SETTINGS.
 
