@@ -486,33 +486,13 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
 
     let insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
 
-    // Last-resort: strip the common blog-trope protein range if the model emits it.
-    // Use a single, computed number when available.
-    const perMeal = proteinPerMealG != null ? `${proteinPerMealG}g` : "50g";
-    insight = insight
-      // 25–40g / 25-40g / 25 to 40g (with optional space and optional trailing 'of protein')
-      .replace(/\b25\s*[–-]\s*40\s*g\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
-      .replace(/\b25\s*to\s*40\s*g\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
-      // 25–40 grams / 25-40 grams / 25 to 40 grams (with optional trailing 'of protein')
-      .replace(/\b25\s*[–-]\s*40\s*grams?\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
-      .replace(/\b25\s*to\s*40\s*grams?\b(?:\s*(?:of\s+protein|protein))?/gi, perMeal)
-      // fallback: '25–40' followed shortly by 'protein' even if units are missing
-      .replace(/\b25\s*[–-]\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal)
-      .replace(/\b25\s*to\s*40\b(?=[^\n]{0,24}\bprotein\b)/gi, perMeal);
 
     // ===== Voice guardrails (hard enforcement) =====
     const userAskedAQuestion = /\?\s*$/.test(question.trim());
     const isRoastRequest = /\broast me\b/.test(qLower) || (/\bdo your worst\b|\bkick my ass\b|\bbe harsh\b/.test(qLower) && tonePreference === "sharp");
 
-    // Helper values for short statement/quick reflection mode
+    // Helper values for post-processing
     const qTrim = question.trim();
-    const isShortStatement = qTrim.length <= 22 && !/\b(what|how|why|should|can you|could you|help|suggest|recommend|ideas|options)\b/i.test(qTrim);
-    const isGreeting = /^(sup|hey|yo|hello|hi)\b[\s!.]*$/i.test(qTrim);
-    const isKnownQuickStatement = (
-      isGreeting ||
-      /^(meh|hmm+|hmmm+|ok|okay|lol|lmao|boo|nah|eh|mid|long day|snack day|gonna be a snack day|gonna be snack day|snack day honestly|total snack day|tired|i\s*'?m\s*beat|im\s*beat|i\s*'?m\s*tired|im\s*tired)$/i.test(qTrim)
-    );
-    const shouldForceReflectionOnly = !userAskedAQuestion && (isShortStatement || isKnownQuickStatement) && !isRoastRequest;
 
     // Grab the most recent assistant message to avoid repeating the same roast hook
     const lastAssistantMsg = [...chatHistory].slice().reverse().find((m: any) => (m?.role === "assistant"))?.text;
@@ -536,67 +516,11 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       return NextResponse.json({ insight: insight + debugFooter });
     }
 
-    // Ban corny / blog phrases even if the model slips
-    insight = insight
-      .replace(/\bno small feat\b/gi, "")
-      .replace(/\bsweet spot\b/gi, "")
-      .replace(/\bkeep it balanced\b/gi, "")
-      .replace(/\bmix things up\b/gi, "")
-      .replace(/\bit'?s all about\b[^.?!]*[.?!]?/gi, "")
-      .replace(/\bkeep that momentum going\b/gi, "")
-      .replace(/\bcrushing it\b/gi, "")
-      .replace(/\byou\s*'?ve\s*got\s*this\b/gi, "")
-      .replace(/\bkeep pushing through\b/gi, "")
-      .replace(/^\s*I get that\.?\s*/i, "That tracks. ")
-      .trim();
 
-    // If user gave a quick statement (not a question), force reflection-only and stop.
-    if (shouldForceReflectionOnly) {
-      // Hard reflection-only mode: 1 short line, no advice, no questions.
-      const qt = qTrim.toLowerCase();
-      if (/^(sup|yo|hey|hello|hi)\b/.test(qt)) {
-        insight = "Sup.";
-      } else if (/^(meh)$/.test(qt)) {
-        insight = "That tracks.";
-      } else if (/^(long day)$/.test(qt)) {
-        insight = "No shame. Long day.";
-      } else if (/^(tired|im tired|i'm tired|im beat|i'm beat)$/.test(qt)) {
-        insight = "That tracks. You sound cooked.";
-      } else if (/snack day/.test(qt)) {
-        insight = "No shame. Snack day.";
-      } else {
-        // Fallback: keep only the first sentence and strip any suggestion/questiony lead-ins.
-        const firstSentence = (insight.split(/(?<=[.!])\s+/)[0] || insight).trim();
-        insight = firstSentence
-          .replace(/^\s*(how about|maybe|consider|you might want to|try)\b[\s\S]*/i, "")
-          .replace(/\?+\s*$/g, "")
-          .trim();
-        if (!insight) insight = "That tracks.";
-      }
-    }
 
-    // Hard opener ban: if it starts with common template openers, rewrite the opener.
-    if (/^\s*(i\s+get\s+that|i\s+hear\s+you|you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b/i.test(insight)) {
-      insight = "That tracks. " + insight
-        .replace(/^\s*(i\s+get\s+that|i\s+hear\s+you|you\s*'?ve\s*got|you\s*'?ve\s*been|you\s+have|you\s+are|you\s+had|you\s+hit|looks\s+like\s+you\s*'?ve|just\s+checking|just\s+wrapping|with\b[^\n]{0,40}\bleft)\b\s*[:,—-]?\s*/i, "")
-        .trim();
-    }
 
     // ROAST MODE: one punch only (1–2 lines), no softening after ("but hey", "just remember", etc.)
     if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
-      // Prevent repeating the same roast hook from the last assistant message
-      if (/\bOlympic\b/i.test(lastAssistantText) && /\bOlympic\b/i.test(insight)) {
-        insight = insight.replace(/\bOlympic\b/gi, "Fitbit");
-      }
-      if (/\bmarathon\b/i.test(lastAssistantText) && /\bmarathon\b/i.test(insight)) {
-        insight = insight.replace(/\bmarathon\b/gi, "hot-lap");
-      }
-      if (/\btraining\s+for\s+a\s+marathon\b/i.test(lastAssistantText) && /\btraining\s+for\s+a\s+marathon\b/i.test(insight)) {
-        insight = insight.replace(/training\s+for\s+a\s+marathon/gi, "auditioning for a cardio documentary");
-      }
-      if (/\bwhere\s*'?s\s*my\s*snack\b/i.test(lastAssistantText) && /\bwhere\s*'?s\s*my\s*snack\b/i.test(insight)) {
-        insight = insight.replace(/where\s*'?s\s*my\s*snack/gi, "snack radar");
-      }
       insight = insight
         // hard-stop anything after common softening pivots
         .replace(/\b(but hey|but seriously|just remember|remember|at least|seriously|in all seriousness)\b[\s\S]*/i, "")
@@ -634,30 +558,15 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       insight = sentences.slice(0, 2).join(" ").trim();
     }
 
-    // If user did not ask a question, do not ask one back.
-    // Remove any sentence that ends with a question mark.
     if (!userAskedAQuestion) {
+      // Drop any sentence that ends with a question mark.
       const parts = insight.split(/(?<=[.!?])\s+/).filter(Boolean);
-      const kept = parts.filter(s => {
-        const t = s.trim();
-        if (/\?\s*$/.test(t)) return false;
-        // Also drop implied questions even if the '?' got stripped earlier.
-        if (/^(how|what|why|should|can|could|would)\b/i.test(t)) return false;
-        return true;
-      });
-      insight = (kept.length ? kept.join(" ") : insight.replace(/\?+/g, "")).trim();
-      // As a final guard, remove any trailing question mark.
+      const kept = parts.filter(s => !/\?\s*$/.test(s.trim()));
+      insight = (kept.length ? kept.join(" ") : insight).trim();
+      // Final guard: strip trailing '?' if present.
       insight = insight.replace(/\?\s*$/g, "").trim();
     }
 
-    // Final hard opener ban (enforced): never start a reply with "You've got" / "You've been" / "You have".
-    // (Prompt-level bans aren't sufficient; we normalize here to keep the voice consistent.)
-    if (/^\s*you\s*['’]?ve\s+(got|been)\b/i.test(insight) || /^\s*you\s+have\b/i.test(insight)) {
-      insight = "Let’s be real. " + insight
-        .replace(/^\s*you\s*['’]?ve\s+(got|been)\b\s*[:,—-]?\s*/i, "")
-        .replace(/^\s*you\s+have\b\s*[:,—-]?\s*/i, "")
-        .trim();
-    }
     return NextResponse.json({ insight: insight + debugFooter });
 
   } catch (error: any) {
