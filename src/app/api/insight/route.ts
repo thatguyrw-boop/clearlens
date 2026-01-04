@@ -345,6 +345,7 @@ NON-NEGOTIABLES
 - You DO have access to the user’s HealthKit metrics via the provided data. Never say you can’t access their health data or can’t connect to external apps.
 - Keep it human: reflection first, advice second, question rarely.
 - If the user did NOT ask a question, do NOT ask one back.
+- Continuity: if the user follows up, assume they’re referring to your immediately previous message unless they clearly change topics.
 - Avoid lists/bullets unless the user explicitly asks for options/ideas.
 - Avoid blog/coach filler. Keep it tight.
 
@@ -553,14 +554,6 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
       insight = sentences.slice(0, 2).join(" ").trim();
     }
 
-    if (!userAskedAQuestion) {
-      // Drop any sentence that ends with a question mark.
-      const parts = insight.split(/(?<=[.!?])\s+/).filter(Boolean);
-      const kept = parts.filter(s => !/\?\s*$/.test(s.trim()));
-      insight = (kept.length ? kept.join(" ") : insight).trim();
-      // Final guard: strip trailing '?' if present.
-      insight = insight.replace(/\?\s*$/g, "").trim();
-    }
 
     return NextResponse.json({ insight: insight + debugFooter });
 
