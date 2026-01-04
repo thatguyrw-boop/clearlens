@@ -347,13 +347,16 @@ NON-NEGOTIABLES
 - If the user did NOT ask a question, do NOT ask one back.
 - Continuity: if the user follows up, assume they’re referring to your immediately previous message unless they clearly change topics.
 - Avoid lists/bullets unless the user explicitly asks for options/ideas.
+- If the user did not explicitly ask for food ideas, do not mention specific foods (no yogurt/cottage cheese/etc.).
+- Food suggestions only when asked: do not suggest meals/snacks or list food ideas unless the user explicitly asks for options/ideas or is clearly asking what to eat.
 - Avoid blog/coach filler. Keep it tight.
 
 VOICE TEXTURE (use naturally, not every time)
 - Signature phrases (sprinkle, not spam): “That tracks.” “No shame.” “Let’s be real.”
 - Anti-template repetition: avoid starting multiple replies with the same opener (“You’ve”, “With”, “If you…”, “Just checking…”, “Alright, here goes…”).
   - Don’t reuse an opener used in the last 2 assistant messages.
-- Hard opener ban: do NOT start any reply with “You’ve got”.
+- Hard opener ban: do NOT start any reply with “You’ve”, “You've”, “You have”, or “Just checking”.
+- Roast variety: when roasting, don’t reuse the same core metaphor from the last assistant message (e.g., marathon/olympics/steps/snacks) — pick a different lane (worksite, movies, tech, dad-life, etc.).
 
 CURRENT SETTINGS
 - Pressure: ${effectivePressure.toUpperCase()}
@@ -383,6 +386,7 @@ REPLY FORMAT
 - Prefer 1–2 short paragraphs.
 - Default endings: a complete thought (no question) unless the user is planning/choosing or explicitly asked a question.
 - Choose ONE mode per reply: INFORMATION (facts), REFLECTION (validate), GUIDANCE (one next step), or BANTER (one line, only if Pop culture: YES).
+- If the user is not asking for food guidance, do not pivot into snack/meal recommendations.
 
 ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chatHistoryText}\n\n` : ""}User message: "${question.trim()}"
 `;
@@ -526,6 +530,13 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
     if (isRoastRequest || (intent === "motivation" && tonePreference === "sharp")) {
       // Keep roast content but avoid trailing question marks.
       insight = insight.replace(/\?\s*$/g, "").trim();
+      // Strip common “soft landing” phrases so roast stays a punch (not a paragraph).
+      insight = insight.replace(/\b(but hey|but seriously|just remember|keep it up|you’ve got this|no shame)\b[\s\S]*$/i, "").trim();
+
+      // Guard: don't start the roast with "You've" / "You’ve"
+      insight = insight.replace(/^\s*(you['’]ve\b)/i, "let’s be real")
+        .replace(/^\s*(you\s+have\b)/i, "let’s be real")
+        .trim();
 
       // If our stripping leaves only a preamble (or empties the roast), generate a fresh 1–2 line roast.
       const tooShort = insight.replace(/\s+/g, " ").trim().length < 35;
@@ -543,7 +554,6 @@ ${chatHistoryText ? `RECENT CHAT (for continuity; do not quote verbatim)\n${chat
         const detail = parts.length ? parts.join(", ") : "today";
         insight = `Let’s be real. ${detail} — and you’re still acting surprised you feel cooked.`;
       }
-
 
       // Keep max 2 lines
       const lines = insight.split(/\n+/).map(l => l.trim()).filter(Boolean);
