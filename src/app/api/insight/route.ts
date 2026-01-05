@@ -90,7 +90,7 @@ export async function POST(req: Request) {
       "general";
 
     // Response mode contract
-    const wantsSuggestions = /\b(ideas?|suggest|what should i|options?|help me|plan)\b/.test(qLower);
+    const wantsSuggestions = /\b(ideas?|suggest|recommend|what should i|what do i eat|what to eat|order|menu|options?|help me|plan|chick\s*-?fil\s*-?a|chickfila|restaurant)\b/.test(qLower);
     const wantsRoast = intent === "motivation";
     const wantsNumbersOnly = isNumbersRequest && !wantsSuggestions && !wantsRoast;
 
@@ -103,8 +103,10 @@ export async function POST(req: Request) {
 
 Rules:
 - Default to one sentence.
-- Do not give advice unless explicitly asked.
-- Do not recommend food unless the user asks for suggestions.
+- Do not recommend food unless the user explicitly asks for suggestions.
+- If the user asks for food suggestions (including restaurant orders), give 2–3 concrete options.
+- Keep suggestions short. No lectures.
+- If you don't have exact macros for a restaurant item, say "I don't have the exact macros here" and suggest checking the restaurant nutrition page or sharing the macros.
 - Do not add motivational wrap-ups.
 - If data is unavailable, say so plainly.
 - If it's morning (localHour < 11), avoid guilt/urgency language unless the user explicitly asks for a plan.
@@ -146,6 +148,11 @@ User: "${question.trim()}"`;
       }
     }
 
+    // Defer / not-now: acknowledge and stop.
+    if (/\b(give me time|not now|later|chill|hold on|wait)\b/.test(qLower)) {
+      return NextResponse.json({ insight: "Got you." });
+    }
+
 
     // Roast / motivation: one line only
     if (intent === "motivation") {
@@ -160,7 +167,7 @@ User: "${question.trim()}"`;
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       temperature,
-      max_tokens: 300, // Enforce brevity
+      max_tokens: 120, // Enforce brevity
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: question.trim() },
@@ -168,6 +175,47 @@ User: "${question.trim()}"`;
     });
 
     let insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
+
+    // If the user asked for suggestions, do not refuse. Keep it brief.
+    if (wantsSuggestions) {
+      const refusal = /\b(i can( not|'t) provide|i (_toggle|cannot) provide|i don't provide|unable to provide)\b/i;
+      if (/\bfood\b/i.test(qLower) || /\beat\b/i.test(qLower) || /\bchick\s*-?fil\s*-?a\b/i.test(qLower)) {
+        if (refusal.test(insight)) {
+          insight = "Tell me the place and your priority (high protein, lower fat, or lower calories) and I’ll give 2–3 picks.";
+        }
+      }
+    }
+
+    // Hard contract: unless the user explicitly asked for suggestions/plan, keep it to ONE sentence.
+    if (!wantsSuggestions && intent !== "motivation") {
+      // Normalize whitespace/newlines
+      insight = insight.replace(/\s*\n+\s*/g, " ").trim();
+      // Take the first sentence-like chunk
+      const first = insight.split(/(?<=[.!])\s+|\s*\n\s*/).filter(Boolean)[0];
+      insight = (first ?? insight).trim();
+      // Remove trailing question marks (no prompting unless asked)
+      insight = insight.replace(/\?\s*$/g, "").trim();
+      // Strip obvious unsolicited recommendation verbs (light touch)
+      if (!/\b(plan|ideas?|suggest|options?)\b/i.test(qLower)) {
+        insight = insight.replace(/\b(you should|try to|consider|aim for|make sure to|i recommend)\b[^.]*\.?/i, (m) => {
+          // If the whole line is a recommendation, fall back to a neutral acknowledgement.
+          return "";
+        }).trim();
+        if (!insight) insight = "Got you.";
+      }
+    }
+
+    if (isMorning && !wantsSuggestions && intent !== "motivation") {
+      // Remove urgency words that read as guilt/pressure.
+      insight = insight.replace(/\b(need to|must|right now|asap|no excuse)\b/gi, "").replace(/\s{2,}/g, " ").trim();
+    }
+
+
+    if (wantsSuggestions) {
+      insight = insight.replace(/\s*\n+\s*/g, " ").trim();
+      const sentences = insight.split(/(?<=[.!])\s+/).filter(Boolean);
+      insight = sentences.slice(0, 2).join(" ").trim();
+    }
 
 
     // ===== Minimal post-processing (keep flow, avoid rule debt) =====
