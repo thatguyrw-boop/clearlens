@@ -59,7 +59,13 @@ export async function POST(req: Request) {
       }
     }
 
-    const fmt = (n?: number, suffix = "") => (n == null ? "—" : `${n}${suffix}`);
+    const fmt = (n?: number, suffix = "") => {
+      if (n == null) return "—";
+      if (!Number.isFinite(n)) return "—";
+      // If it's basically an integer, print as int. Otherwise, 1 decimal.
+      const v = Math.abs(n - Math.round(n)) < 0.0001 ? Math.round(n) : Math.round(n * 10) / 10;
+      return `${v}${suffix}`;
+    };
     const steps = num(rawMetrics.steps);
     const totalCaloriesBurned = num(rawMetrics.totalCaloriesBurned);
     const dietaryCalories = num(rawMetrics.dietaryEnergyConsumed ?? rawMetrics.dietaryCalories);
@@ -81,7 +87,7 @@ export async function POST(req: Request) {
     const qLower = question.toLowerCase();
     const isGreetingOnly = /^(hi|hey|hello|yo|sup|what\s*'s\s*up|whats\s*up)\b[!.\s]*$/i.test(question.trim());
     const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
-    const isNumbersRequest = /\b(numbers?|calories|kcal|deficit|calculate|math|protein|carbs?|fat|fiber|macros?)\b/.test(qLower);
+    const isNumbersRequest = /\b(numbers?|steps?|sleep|rhr|hrv|workouts?|distance|calories|kcal|deficit|burned|eaten|intake|calculate|math|protein|carbs?|fat|fiber|macros?)\b/.test(qLower);
 
     const intent =
       isGreetingOnly ? "greeting" :
@@ -93,6 +99,19 @@ export async function POST(req: Request) {
     const wantsSuggestions = /\b(ideas?|suggest|recommend|what should i|what do i eat|what to eat|order|menu|options?|help me|plan|chick\s*-?fil\s*-?a|chickfila|restaurant)\b/.test(qLower);
     const wantsRoast = intent === "motivation";
     const wantsNumbersOnly = isNumbersRequest && !wantsSuggestions && !wantsRoast;
+
+    const isConversationRequest = /\b(how('?s| is) my day|how am i doing|where am i at|am i good|what do you think|check\s*-?in|status|summary|so far)\b/.test(qLower);
+
+    const mentionsChickfila = /\bchick\s*-?fil\s*-?a\b|\bchickfila\b/.test(qLower);
+    const hasFoodPriority = /\b(high\s*protein|protein\s*heavy|low\s*fat|lower\s*fat|low\s*cal(ories)?|lower\s*cal(ories)?|cut|lean|lighter|light)\b/.test(qLower);
+
+
+    // Organic food suggestions: if user asks Chick-fil-A but doesn't specify a goal, ask one clarifying question.
+    if (wantsSuggestions && mentionsChickfila && !hasFoodPriority) {
+      return NextResponse.json({
+        insight: "Chick-fil-A — what’s your priority: high protein, lower fat, or lower calories?",
+      });
+    }
 
 
     const includeMacroContext = /\b(protein|carbs?|fat|fiber|macros?)\b/.test(qLower) || /\b(eat|food|meal|dinner|lunch|snack|dessert|menu)\b/.test(qLower);
@@ -135,7 +154,7 @@ User: "${question.trim()}"`;
     // Default metrics-only responses (one line, no advice)
     if (wantsNumbersOnly) {
       if (/\bsteps?\b/.test(qLower)) {
-        return NextResponse.json({ insight: `${fmt(steps)} steps today.` });
+        return NextResponse.json({ insight: `${fmt(steps)} steps so far.` });
       }
       if (/\b(protein)\b/.test(qLower)) {
         return NextResponse.json({ insight: `${fmt(dietaryProteinG)}g protein so far.` });
@@ -146,11 +165,59 @@ User: "${question.trim()}"`;
       if (/\b(sleep)\b/.test(qLower)) {
         return NextResponse.json({ insight: `${fmt(sleepHours)} hours of sleep.` });
       }
+      if (/\b(resting\s*heart\s*rate|rhr)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(restingHeartRate)} bpm resting heart rate.` });
+      }
+      if (/\b(hrv)\b/.test(qLower)) {
+        return NextResponse.json({ insight: hrvSdnn != null ? `${fmt(hrvSdnn)} ms HRV (SDNN).` : `HRV not available.` });
+      }
+      if (/\b(burned)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(totalCaloriesBurned)} kcal burned.` });
+      }
+      if (/\b(eaten|intake|consumed)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(dietaryCalories)} kcal eaten.` });
+      }
+      const workoutCount = num(rawMetrics.workoutCount);
+      const workoutMinutes = num(rawMetrics.workoutMinutes);
+      if (/\b(workouts?)\b/.test(qLower)) {
+        if (workoutCount != null) {
+          return NextResponse.json({ insight: `${fmt(workoutCount)} workout${workoutCount === 1 ? "" : "s"} today.` });
+        }
+        return NextResponse.json({ insight: `Workouts not available.` });
+      }
+      if (/\b(workout\s*minutes?)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(workoutMinutes)} workout minutes today.` });
+      }
     }
 
     // Defer / not-now: acknowledge and stop.
     if (/\b(give me time|not now|later|chill|hold on|wait)\b/.test(qLower)) {
       return NextResponse.json({ insight: "Got you." });
+    }
+
+    // Conversation mode: one line + one follow-up question (keeps it human without lectures)
+    if (intent === "general" && isConversationRequest && !wantsSuggestions) {
+      const parts: string[] = [];
+
+      if (isMorning) parts.push("Early day");
+      else parts.push("So far");
+
+      if (steps != null) parts.push(`${fmt(steps)} steps`);
+
+      // Prefer protein if macros are present; otherwise prefer net.
+      if (dietaryProteinG != null) {
+        parts.push(`${fmt(dietaryProteinG)}g protein`);
+      } else if (netDeficitSoFar != null) {
+        parts.push(`net ${fmt(netDeficitSoFar)} kcal`);
+      } else if (dietaryCalories != null && totalCaloriesBurned != null) {
+        parts.push(`${fmt(dietaryCalories)} eaten / ${fmt(totalCaloriesBurned)} burned`);
+      }
+
+      // If we truly have nothing, keep it honest.
+      const summary = parts.length ? parts.join(": ").replace(/:\s*$/, "") : "Fresh start.";
+
+      // One sentence that includes the question (still feels conversational).
+      return NextResponse.json({ insight: `${summary}. Want suggestions or just status?` });
     }
 
 
@@ -221,13 +288,17 @@ User: "${question.trim()}"`;
     // ===== Minimal post-processing (keep flow, avoid rule debt) =====
     const qTrim = question.trim();
 
-    // Treat tiny reactions as lightweight acknowledgements (no pivot)
-    const isReactionMessage = /^(meh|mid|boo|nah|eh|hmm+|ok|okay|k|kk|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes|bruh)$/i.test(qTrim.replace(/^oh\s+/i, "").trim());
+    // Treat ONLY very short reactions as lightweight acknowledgements (prevents repetitive "Got you" replies)
+    const qTiny = qTrim.replace(/^oh\s+/i, "").trim();
+    const tinyWords = qTiny.split(/\s+/).filter(Boolean);
+    const isTiny = qTiny.length <= 12 && tinyWords.length <= 2;
+
+    const isReactionMessage = isTiny && /^(meh|mid|boo|nah|eh|hmm+|ok|okay|k|kk|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes|bruh)$/i.test(qTiny);
     if (isReactionMessage) {
-      const t = qTrim.replace(/^oh\s+/i, "").trim().toLowerCase();
+      const t = qTiny.toLowerCase();
       const negative = /^(meh|mid|nah|boo|eh|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes)$/i.test(t);
       insight = negative ? "Fair." : "Got you.";
-      return NextResponse.json({ insight: insight });
+      return NextResponse.json({ insight });
     }
 
     // Don’t end with a question mark.
