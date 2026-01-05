@@ -85,6 +85,11 @@ export async function POST(req: Request) {
 
     // ====================== INTENT DETECTION ======================
     const qLower = question.toLowerCase();
+    // Debug check (does not affect normal behavior): user can type "version" to verify deployment.
+    if (qLower.trim() === "version") {
+      const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "local";
+      return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)}` });
+    }
     const isGreetingOnly = /^(hi|hey|hello|yo|sup|what\s*'s\s*up|whats\s*up)\b[!.\s]*$/i.test(question.trim());
     const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
     const isNumbersRequest = /\b(numbers?|steps?|sleep|rhr|hrv|workouts?|distance|calories|kcal|deficit|burned|eaten|intake|calculate|math|protein|carbs?|fat|fiber|macros?)\b/.test(qLower);
