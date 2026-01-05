@@ -259,7 +259,7 @@ User: "${question.trim()}"`;
     }
 
     // Hard contract: unless the user explicitly asked for suggestions/plan, keep it to ONE sentence.
-    if (!wantsSuggestions && intent !== "motivation") {
+    if (!wantsSuggestions && !wantsRoast) {
       // Normalize whitespace/newlines
       insight = insight.replace(/\s*\n+\s*/g, " ").trim();
       // Take the first sentence-like chunk
@@ -277,7 +277,7 @@ User: "${question.trim()}"`;
       }
     }
 
-    if (isMorning && !wantsSuggestions && intent !== "motivation") {
+    if (isMorning && !wantsSuggestions && !wantsRoast) {
       // Remove urgency words that read as guilt/pressure.
       insight = insight.replace(/\b(need to|must|right now|asap|no excuse)\b/gi, "").replace(/\s{2,}/g, " ").trim();
     }
