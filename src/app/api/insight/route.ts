@@ -86,15 +86,24 @@ export async function POST(req: Request) {
       isNumbersRequest ? "numbers" :
       "general";
 
+    // Response mode contract
+    const wantsSuggestions = /\b(ideas?|suggest|what should i|options?|help me|plan)\b/.test(qLower);
+    const wantsRoast = intent === "motivation";
+    const wantsNumbersOnly = isNumbersRequest && !wantsSuggestions && !wantsRoast;
+
 
     const includeMacroContext = /\b(protein|carbs?|fat|fiber|macros?)\b/.test(qLower) || /\b(eat|food|meal|dinner|lunch|snack|dessert|menu)\b/.test(qLower);
 
 
     // Removed days_active memory update
-    const systemPrompt = `You are ClearLens, a calm witty wellness friend inside this app.
+    const systemPrompt = `You are ClearLens. Report metrics accurately and briefly.
 
-Hard rules: You DO have access to the provided HealthKit metrics. Don’t say you can’t access data. Be direct and practical (not therapy). Do NOT infer emotional state from sarcasm, short replies, or feedback (“meh”, “horrible”, “weak”)—treat those as simple feedback. No pep talks (“you’ve got this”, “I’m here to listen”, “deep breaths”). If the user didn’t ask a question, don’t ask one. No lists unless the user asks.
-
+Rules:
+- Default to one sentence.
+- Do not give advice unless explicitly asked.
+- Do not recommend food unless the user asks for suggestions.
+- Do not add motivational wrap-ups.
+- If data is unavailable, say so plainly.
 Today: steps=${fmt(steps)}; burned=${fmt(totalCaloriesBurned)}; eaten=${fmt(dietaryCalories)}; net=${fmt(netDeficitSoFar)}; sleep=${fmt(sleepHours)}h; rhr=${fmt(restingHeartRate)}; hrvSdnn=${fmt(hrvSdnn)}.
 ${includeMacroContext ? `Macros: protein=${fmt(dietaryProteinG)}g (target ${proteinTargetG != null ? fmt(proteinTargetG, "g") : "—"}, remaining ${proteinRemainingG != null ? fmt(proteinRemainingG, "g") : "—"}); carbs=${fmt(dietaryCarbsG)}g; fat=${fmt(dietaryFatG)}g; fiber=${fmt(dietaryFiberG)}g.` : ""}
 
@@ -114,6 +123,32 @@ User: "${question.trim()}"`;
       const t = question.trim().toLowerCase();
       const reply = (t.includes("sup") || t.includes("what's up") || t.includes("whats up")) ? "Sup." : "Hey.";
       return NextResponse.json({ insight: reply });
+    }
+
+    // Default metrics-only responses (one line, no advice)
+    if (wantsNumbersOnly) {
+      if (/\bsteps?\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(steps)} steps today.` });
+      }
+      if (/\b(protein)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(dietaryProteinG)}g protein so far.` });
+      }
+      if (/\b(calories|kcal|deficit)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `Net ${fmt(netDeficitSoFar)} kcal.` });
+      }
+      if (/\b(sleep)\b/.test(qLower)) {
+        return NextResponse.json({ insight: `${fmt(sleepHours)} hours of sleep.` });
+      }
+    }
+
+
+    // Roast / motivation: one line only
+    if (intent === "motivation") {
+      const s = steps != null ? Math.round(steps) : undefined;
+      if (s != null) {
+        return NextResponse.json({ insight: `${s.toLocaleString()} steps. Your legs are in airplane mode.` });
+      }
+      return NextResponse.json({ insight: `Let’s be honest — effort is on standby today.` });
     }
 
 
@@ -142,31 +177,8 @@ User: "${question.trim()}"`;
       return NextResponse.json({ insight: insight });
     }
 
-    // Roast / motivation: keep it to 1–2 punchy sentences, no softening paragraph after.
-    if (intent === "motivation") {
-      insight = insight
-        .replace(/\b(but hey|but seriously|in all seriousness|just remember)\b[\s\S]*/i, "")
-        .trim();
-
-      const sentences = insight.split(/(?<=[.!])\s+/).filter(Boolean);
-      insight = sentences.slice(0, 2).join(" ").trim();
-
-      // If it collapsed into something too short, synthesize a single-line roast from real metrics.
-      if (insight.replace(/\s+/g, " ").length < 35) {
-        const s = steps != null ? Math.round(steps) : undefined;
-        const deficit = netDeficitSoFar;
-        const protLeft = proteinRemainingG;
-        const parts: string[] = [];
-        if (s != null) parts.push(`~${s.toLocaleString()} steps`);
-        if (deficit != null) parts.push(`~${Math.abs(deficit).toLocaleString()} kcal ${deficit >= 0 ? "deficit" : "surplus"}`);
-        if (protLeft != null) parts.push(`${protLeft}g protein left`);
-        const detail = parts.length ? parts.join(", ") : "today";
-        insight = `Let’s be real — ${detail}. Tighten it up.`;
-      }
-    }
-
     // Don’t end with a question mark.
-    insight = insight.replace(/\?\s*$/g, "").trim();
+    // insight = insight.replace(/\?\s*$/g, "").trim();
 
     return NextResponse.json({ insight: insight });
 
