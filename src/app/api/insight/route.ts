@@ -40,7 +40,6 @@ export async function POST(req: Request) {
       profile: rawProfile = {},
       preferences: rawPreferences = {},
       trends: rawTrends = {},
-      feedback, // optional: { rating: "positive" | "negative" }
     } = body ?? {};
 
 
@@ -106,7 +105,6 @@ export async function POST(req: Request) {
     const weightLbs = (weightKg == null) ? undefined : Math.round(weightKg * 2.2046226218);
 
     // Preferences
-    const pressurePreference = num(rawPreferences.pressure) ?? 2; // 1=low, 2=medium, 3=high
     const tonePreference: "neutral" | "warm" | "sharp" =
       rawPreferences?.tone === "warm" || rawPreferences?.tone === "sharp"
         ? rawPreferences.tone
@@ -114,16 +112,9 @@ export async function POST(req: Request) {
     // ====================== INTENT DETECTION ======================
     const qLower = question.toLowerCase();
     const isGreetingOnly = /^(hi|hey|hello|yo|sup|what\s*'s\s*up|whats\s*up)\b[!.\s]*$/i.test(question.trim());
-
-    const isMetaFeedback = /\b(why are you|too harsh|too repetitive|stop roasting|same answers|feedback)\b/.test(qLower);
     const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
     const isFoodQuestion = /\b(what should i eat|dinner|lunch|snack|chicken|steak|shrimp|tacos|pizza|dessert|menu|burrito|lasagna|pasta)\b/.test(qLower);
-
-
     const wantsQuickLog = /\b(just log it|just need to log|just log|log it|log this|add it|already logged|all logged)\b/.test(qLower);
-
-
-    const isProgressCheck = /\b(progress|how am i doing|how\s*'s my|how is my|today so far|late night check|recap)\b/.test(qLower);
     const baseNumbersRe = /\b(numbers?|calories|kcal|deficit|calculate|calculated|how did you|show your work|math)\b/;
     const macroWordsRe = /\b(protein|carbs?|fat|fiber|macros?)\b/;
     const numberCueRe = /\b(\d+|grams?|\bg\b|kcal|calories|how many|how much|what are|numbers?)\b/;
@@ -131,12 +122,10 @@ export async function POST(req: Request) {
 
     const intent =
       isGreetingOnly ? "greeting" :
-      isMetaFeedback ? "meta_feedback" :
       (isNumbersRequest && isMotivationRequest) ? "motivation" :
       isNumbersRequest ? "numbers" :
       isFoodQuestion ? "food" :
       isMotivationRequest ? "motivation" :
-      isProgressCheck ? "progress" :
       "general";
 
 
@@ -158,25 +147,9 @@ export async function POST(req: Request) {
     }
 
     const daysActive = Number(memories.days_active ?? 0);
-    const proteinStreak = Number(memories.protein_streak_days ?? 0);
     const favoriteSnack = (memories.favorite_snack as string) || null;
     const goal = (memories.goal as string) || null;
-    const lastFeedback = (memories.last_feedback as string) || null;
 
-    let effectivePressure: "low" | "medium" | "high" =
-      pressurePreference === 1 ? "low" :
-      pressurePreference === 3 ? "high" :
-      "medium";
-
-    // If user said we’re too intense, dial it back one notch.
-    if (lastFeedback === "too_much_pressure") {
-      effectivePressure = effectivePressure === "high" ? "medium" : "low";
-    }
-
-    // Numbers/meta feedback should stay low pressure.
-    if (intent === "numbers" || intent === "meta_feedback") {
-      effectivePressure = "low";
-    }
 
 
     const includeMacroContext =
@@ -193,17 +166,6 @@ export async function POST(req: Request) {
         const updates: Record<string, any> = {
           days_active: daysActive + 1,
         };
-
-        if (dietaryProteinG != null && dietaryProteinG >= 140) {
-          updates.protein_streak_days = proteinStreak + 1;
-        } else if (proteinStreak > 0) {
-          updates.protein_streak_days = 0;
-        }
-
-        if (feedback?.rating) {
-          updates.last_feedback = feedback.rating === "negative" ? "too_much_pressure" : "good";
-        }
-
         const rows = Object.entries(updates).map(([key, value]) => ({ user_id: userId, key, value }));
         if (rows.length) {
           await supabase.from("user_memories").upsert(rows, { onConflict: "user_id,key" });
@@ -214,7 +176,7 @@ export async function POST(req: Request) {
     })();
     const systemPrompt = `You are ClearLens, a calm witty wellness friend inside this app.
 
-Hard rules: You DO have access to the provided HealthKit metrics. Don’t say you can’t access data. Keep it human: reflect first, advise second. If the user didn’t ask a question, don’t ask one. No lists unless the user asks.
+Hard rules: You DO have access to the provided HealthKit metrics. Don’t say you can’t access data. Be direct and practical (not therapy). Do NOT infer emotional state from sarcasm, short replies, or feedback (“meh”, “horrible”, “weak”)—treat those as simple feedback. No pep talks (“you’ve got this”, “I’m here to listen”, “deep breaths”). If the user didn’t ask a question, don’t ask one. No lists unless the user asks.
 
 Context: goal=${goal || "not set"}; favoriteSnack=${favoriteSnack || "none"}; no gallbladder → moderate fat per meal.
 
@@ -228,14 +190,14 @@ User: "${question.trim()}"`;
       ? `\n\n—\nDEBUG`
         + `\nintent: ${intent}`
         + `\nmacroCtx: ${includeMacroContext}`
-        + `\npressure: ${effectivePressure} tone: ${tonePreference}`
+        + `\ntone: ${tonePreference}`
         + `\nprofile: age ${fmt(age)} sex ${biologicalSex || "—"} ht ${heightUs || "—"} wt ${weightLbs != null ? `${weightLbs}lb` : "—"}`
       : "";
 
     const temperature = intent === "numbers"
       ? 0.2
       : intent === "motivation"
-        ? (effectivePressure === "high" ? 0.7 : 0.55)
+        ? (tonePreference === "sharp" ? 0.65 : 0.5)
         : 0.35;
 
     // Deterministic profile answer: avoid the model hallucinating "I don't have that" when profile is present.
@@ -340,9 +302,11 @@ User: "${question.trim()}"`;
     const userAskedAQuestion = /\?\s*$/.test(qTrim);
 
     // Treat tiny reactions as lightweight acknowledgements (no pivot)
-    const isReactionMessage = /^(meh|mid|boo|nah|eh|hmm+|ok|okay|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof)$/i.test(qTrim);
+    const isReactionMessage = /^(meh|mid|boo|nah|eh|hmm+|ok|okay|k|kk|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes|bruh)$/i.test(qTrim.replace(/^oh\s+/i, "").trim());
     if (isReactionMessage) {
-      insight = /\b(meh|mid|nah|boo|eh)\b/i.test(qTrim) ? "Fair." : "Got you.";
+      const t = qTrim.replace(/^oh\s+/i, "").trim().toLowerCase();
+      const negative = /^(meh|mid|nah|boo|eh|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes)$/i.test(t);
+      insight = negative ? "Fair." : "Got you.";
       return NextResponse.json({ insight: insight + debugFooter });
     }
 
