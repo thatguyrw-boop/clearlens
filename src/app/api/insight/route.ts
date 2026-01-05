@@ -25,9 +25,16 @@ export async function POST(req: Request) {
     const {
       userId, // REQUIRED
       question,
+      localHour: rawLocalHour,
       metrics: rawMetrics = {},
     } = body ?? {};
 
+    const num = (x: any): number | undefined => {
+      const v = typeof x === "string" ? Number(x) : x;
+      return Number.isFinite(v) ? Number(v) : undefined;
+    };
+    const localHour = num(rawLocalHour);
+    const isMorning = localHour != null && localHour >= 0 && localHour < 11;
 
     if (!userId || !question || typeof question !== "string" || !question.trim()) {
       return NextResponse.json(
@@ -52,10 +59,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const num = (x: any): number | undefined => {
-      const v = typeof x === "string" ? Number(x) : x;
-      return Number.isFinite(v) ? Number(v) : undefined;
-    };
     const fmt = (n?: number, suffix = "") => (n == null ? "—" : `${n}${suffix}`);
     const steps = num(rawMetrics.steps);
     const totalCaloriesBurned = num(rawMetrics.totalCaloriesBurned);
@@ -104,10 +107,12 @@ Rules:
 - Do not recommend food unless the user asks for suggestions.
 - Do not add motivational wrap-ups.
 - If data is unavailable, say so plainly.
+- If it's morning (localHour < 11), avoid guilt/urgency language unless the user explicitly asks for a plan.
+Local hour: ${fmt(localHour)}.
 Today: steps=${fmt(steps)}; burned=${fmt(totalCaloriesBurned)}; eaten=${fmt(dietaryCalories)}; net=${fmt(netDeficitSoFar)}; sleep=${fmt(sleepHours)}h; rhr=${fmt(restingHeartRate)}; hrvSdnn=${fmt(hrvSdnn)}.
 ${includeMacroContext ? `Macros: protein=${fmt(dietaryProteinG)}g (target ${proteinTargetG != null ? fmt(proteinTargetG, "g") : "—"}, remaining ${proteinRemainingG != null ? fmt(proteinRemainingG, "g") : "—"}); carbs=${fmt(dietaryCarbsG)}g; fat=${fmt(dietaryFatG)}g; fiber=${fmt(dietaryFiberG)}g.` : ""}
 
-Reply: 1–2 short paragraphs. End with a complete thought.
+Reply: one sentence. End with a complete thought.
 User: "${question.trim()}"`;
 
 
