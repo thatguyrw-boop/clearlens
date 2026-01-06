@@ -275,22 +275,9 @@ User: "${question.trim()}"`;
     }
 
     // Hard contract: unless the user explicitly asked for suggestions/plan, keep it to ONE sentence.
-    if (!wantsSuggestions && !wantsRoast) {
-      // Normalize whitespace/newlines
-      insight = insight.replace(/\s*\n+\s*/g, " ").trim();
-      // Take the first sentence-like chunk
-      const first = insight.split(/(?<=[.!])\s+|\s*\n\s*/).filter(Boolean)[0];
-      insight = (first ?? insight).trim();
-      // Remove trailing question marks (no prompting unless asked)
+    // Keep the assistant from prompting unless asked; otherwise leave tone to the model.
+    if (!/\b(plan|ideas?|suggest|options?)\b/i.test(qLower)) {
       insight = insight.replace(/\?\s*$/g, "").trim();
-      // Strip obvious unsolicited recommendation verbs (light touch)
-      if (!/\b(plan|ideas?|suggest|options?)\b/i.test(qLower)) {
-        insight = insight.replace(/\b(you should|try to|consider|aim for|make sure to|i recommend)\b[^.]*\.?/i, (m) => {
-          // If the whole line is a recommendation, fall back to a neutral acknowledgement.
-          return "";
-        }).trim();
-        if (!insight) insight = "Got you.";
-      }
     }
 
     if (isMorning && !wantsSuggestions && !wantsRoast) {
