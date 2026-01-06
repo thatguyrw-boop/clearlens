@@ -1,25 +1,34 @@
+// force-redeploy: grok-provider-version-v2
 // app/api/insight/route.ts
 
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+function getLLMClient() {
+  const provider = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
+  if (provider === "xai" || provider === "grok") {
+    const apiKey = process.env.XAI_API_KEY;
+    if (!apiKey) throw new Error("Server misconfigured: missing XAI_API_KEY");
+    return {
+      provider: "xai",
+      model: process.env.XAI_MODEL || "grok-4",
+      client: new OpenAI({ apiKey, baseURL: "https://api.x.ai/v1" }),
+    };
+  }
 
-const RATE_WINDOW_MS = 60_000;
-const RATE_MAX = 30;
-const rateMap = new Map<string, { count: number; resetAt: number }>();
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("Server misconfigured: missing OPENAI_API_KEY");
+  return {
+    provider: "openai",
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    client: new OpenAI({ apiKey }),
+  };
+}
 
 
 export async function POST(req: Request) {
   try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "Server misconfigured: missing OpenAI credentials" },
-        { status: 500 }
-      );
-    }
-
-    const openai = new OpenAI({ apiKey });
+    const { client: llm, provider, model } = getLLMClient();
     const body = await req.json().catch(() => ({}));
 
     const {
@@ -88,7 +97,8 @@ export async function POST(req: Request) {
     // Debug check (does not affect normal behavior): user can type "version" to verify deployment.
     if (qLower.trim() === "version") {
       const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "local";
-      return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)}` });
+      const { provider, model } = getLLMClient();
+      return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)} provider:${provider} model:${model} v:2` });
     }
     const isGreetingOnly = /^(hi|hey|hello|yo|sup|what\s*'s\s*up|whats\s*up)\b[!.\s]*$/i.test(question.trim());
     const isMotivationRequest = /\b(roast me|be harsh|push me|motivate|do your worst|kick my ass|be strict|hold me accountable)\b/.test(qLower);
@@ -236,8 +246,8 @@ User: "${question.trim()}"`;
     }
 
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+    const completion = await llm.chat.completions.create({
+      model,
       temperature,
       max_tokens: 120, // Enforce brevity
       messages: [
