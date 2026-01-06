@@ -7,6 +7,9 @@ import OpenAI from 'openai';
 const RATE_WINDOW_MS = 60_000;
 const RATE_MAX = 30;
 const rateMap = new Map<string, { count: number; resetAt: number }>();
+// Lightweight, best-effort memory (in-memory per warm server instance).
+// Enough to avoid immediate "what items?" loops without building a full DB.
+const lastSuggestionsByUser = new Map<string, { text: string; ts: number }>();
 
 function getLLMClient() {
   const provider = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
@@ -117,7 +120,7 @@ export async function POST(req: Request) {
       "general";
 
     // Response mode contract
-    const wantsSuggestions = /\b(ideas?|suggest|recommend|what should i|what do i eat|what to eat|order|menu|options?|help me|plan|chick\s*-?fil\s*-?a|chickfila|restaurant)\b/.test(qLower);
+    const wantsSuggestions = /\b(ideas?|suggest|recommend|what should i|what do i eat|what to eat|order|menu|options?|help me|plan|chick\s*-?fil\s*-?a|chickfila|chipotle|restaurant)\b/.test(qLower);
     const wantsRoast = intent === "motivation";
     const wantsNumbersOnly = isNumbersRequest && !wantsSuggestions && !wantsRoast;
 
@@ -142,6 +145,7 @@ export async function POST(req: Request) {
     const systemPrompt = `You are ClearLens. Report metrics accurately and briefly.
 
 Rules:
+${(() => { const mem = lastSuggestionsByUser.get(String(userId)); return mem && (Date.now() - mem.ts) < 1000 * 60 * 60 ? `Last suggestions (for context): ${mem.text}` : ""; })()}
 - Default to one sentence.
 - Do not recommend food unless the user explicitly asks for suggestions.
 - If the user asks for food suggestions (including restaurant orders), give 2–3 concrete options.
@@ -284,6 +288,13 @@ User: "${question.trim()}"`;
     });
 
     let insight = completion.choices[0]?.message?.content?.trim() ?? "No response.";
+
+    // Save recent suggestions so follow-up questions like "which is better?" have context.
+    if (wantsSuggestions && insight) {
+      const compact = insight.replace(/\s*\n+\s*/g, " ").trim();
+      // Keep it short to avoid prompt bloat.
+      lastSuggestionsByUser.set(String(userId), { text: compact.slice(0, 220), ts: Date.now() });
+    }
 
     // If the user asked for suggestions, do not refuse. Keep it brief.
     if (wantsSuggestions) {
