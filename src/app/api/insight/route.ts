@@ -4,6 +4,10 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 30;
+const rateMap = new Map<string, { count: number; resetAt: number }>();
+
 function getLLMClient() {
   const provider = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
   if (provider === "xai" || provider === "grok") {
