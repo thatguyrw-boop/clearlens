@@ -102,11 +102,8 @@ export async function POST(req: Request) {
     if (qLower.trim() === "version") {
       const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "local";
       const { provider, model } = getLLMClient();
-      const envProvider = String(process.env.LLM_PROVIDER || "");
-      const hasXaiKey = Boolean(process.env.XAI_API_KEY);
-      const envModel = String(process.env.XAI_MODEL || "");
       return NextResponse.json({
-        insight: `backend:${String(sha).slice(0, 12)} provider:${provider} model:${model} v:2 env:LLM_PROVIDER=${envProvider || "unset"} env:XAI_MODEL=${envModel || "unset"} env:hasXAI_KEY=${hasXaiKey ? "true" : "false"}`,
+        insight: `backend:${String(sha).slice(0, 12)} provider:${provider} model:${model}`,
       });
     }
     const isGreetingOnly = /^(hi|hey|hello|yo|sup|what\s*'s\s*up|whats\s*up)\b[!.\s]*$/i.test(question.trim());
