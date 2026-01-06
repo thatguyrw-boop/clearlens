@@ -242,13 +242,34 @@ User: "${question.trim()}"`;
     }
 
 
-    // Roast / motivation: one line only
+    // Roast / motivation: one line only (vary it so it doesn't feel canned)
     if (intent === "motivation") {
       const s = steps != null ? Math.round(steps) : undefined;
+
+      const seedStr = `${userId}-${new Date().toISOString().slice(0, 10)}-${s ?? "na"}`;
+      let seed = 0;
+      for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) >>> 0;
+
+      const roastSteps: string[] = [
+        `${s?.toLocaleString() ?? "0"} steps. Your legs are in airplane mode.`,
+        `${s?.toLocaleString() ?? "0"} steps. That’s not a walk — that’s a Wi‑Fi disconnect.`,
+        `${s?.toLocaleString() ?? "0"} steps. Your step count is doing “rest day” cosplay.`,
+        `${s?.toLocaleString() ?? "0"} steps. Today’s cardio is mostly scrolling.`,
+      ];
+
+      const roastNoSteps: string[] = [
+        `Let’s be honest — effort is on standby today.`,
+        `If motivation were a signal, you’re in a dead zone.`,
+        `We’re not behind — we’re just not moving.`,
+      ];
+
       if (s != null) {
-        return NextResponse.json({ insight: `${s.toLocaleString()} steps. Your legs are in airplane mode.` });
+        const pick = roastSteps[seed % roastSteps.length];
+        return NextResponse.json({ insight: pick });
       }
-      return NextResponse.json({ insight: `Let’s be honest — effort is on standby today.` });
+
+      const pick = roastNoSteps[seed % roastNoSteps.length];
+      return NextResponse.json({ insight: pick });
     }
 
 
@@ -301,11 +322,13 @@ User: "${question.trim()}"`;
     const tinyWords = qTiny.split(/\s+/).filter(Boolean);
     const isTiny = qTiny.length <= 12 && tinyWords.length <= 2;
 
-    const isReactionMessage = isTiny && /^(meh|mid|boo|nah|eh|hmm+|ok|okay|k|kk|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes|bruh)$/i.test(qTiny);
+    const isReactionMessage = (isTiny && /^(meh|mid|boo|nah|eh|hmm+|ok|okay|k|kk|lol|lmao|haha+|nice|fair|touch[eé]?|dang|oof|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes|bruh)$/i.test(qTiny))
+      || /\bsame jokes\b/i.test(qTrim);
+
     if (isReactionMessage) {
       const t = qTiny.toLowerCase();
       const negative = /^(meh|mid|nah|boo|eh|horrible|terrible|trash|garbage|weak|lame|cringe|nope|yikes)$/i.test(t);
-      insight = negative ? "Fair." : "Got you.";
+      insight = /\bsame jokes\b/i.test(qTrim) ? "Fair. Want a harsher roast or something useful?" : (negative ? "Fair." : "Got you.");
       return NextResponse.json({ insight });
     }
 
