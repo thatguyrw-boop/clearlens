@@ -154,8 +154,7 @@ Rules:
 Local hour: ${fmt(localHour)}.
 Today: steps=${fmt(steps)}; burned=${fmt(totalCaloriesBurned)}; eaten=${fmt(dietaryCalories)}; net=${fmt(netDeficitSoFar)}; sleep=${fmt(sleepHours)}h; rhr=${fmt(restingHeartRate)}; hrvSdnn=${fmt(hrvSdnn)}.
 ${includeMacroContext ? `Macros: protein=${fmt(dietaryProteinG)}g (target ${proteinTargetG != null ? fmt(proteinTargetG, "g") : "—"}, remaining ${proteinRemainingG != null ? fmt(proteinRemainingG, "g") : "—"}); carbs=${fmt(dietaryCarbsG)}g; fat=${fmt(dietaryFatG)}g; fiber=${fmt(dietaryFiberG)}g.` : ""}
-
-Reply: one sentence. End with a complete thought.
+${wantsSuggestions ? "Reply: 2–3 concrete options, kept tight (1–2 short sentences total)." : wantsRoast ? "Reply: one sharp roast line." : "Reply: one sentence. End with a complete thought."}
 User: "${question.trim()}"`;
 
 
