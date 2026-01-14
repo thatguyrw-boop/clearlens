@@ -42,8 +42,14 @@ const parseJson = (raw: string) => {
 
 export async function POST(req: Request) {
   try {
-    const { client: llm, model } = getLLMClient();
     const body = await req.json().catch(() => ({}));
+
+    const question = typeof body?.question === "string" ? body.question.trim() : "";
+    if (question.toLowerCase() === "version") {
+      const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "local";
+      const p = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
+      return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)} provider:${p}` });
+    }
 
     const { mode, imageBase64, userProfile } = body ?? {};
     const debugEnabled = process.env.NODE_ENV !== "production" || body?.debug === true;
@@ -55,6 +61,20 @@ export async function POST(req: Request) {
     }
 
     const normalizedMode = mode === "label_extract" ? "label" : mode;
+
+    const forceVisionOpenAI = ["label", "plate", "menu", "pantry"].includes(normalizedMode);
+    let llm: OpenAI;
+    let model: string;
+    if (forceVisionOpenAI) {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (!apiKey) throw new Error("Server misconfigured: missing OPENAI_API_KEY");
+      llm = new OpenAI({ apiKey });
+      model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+    } else {
+      const c = getLLMClient();
+      llm = c.client;
+      model = c.model;
+    }
 
     if (!imageBase64 || typeof imageBase64 !== "string") {
       return NextResponse.json(
@@ -305,6 +325,7 @@ Respond ONLY as valid JSON with this exact shape:
 
   } catch (error: any) {
     console.error('Insight API error:', error);
-    return NextResponse.json({ error: 'Failed to generate insight' }, { status: 500 });
+    const message = typeof error?.message === "string" ? error.message : "Failed to generate insight";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
