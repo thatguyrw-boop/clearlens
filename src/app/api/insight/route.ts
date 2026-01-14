@@ -32,6 +32,11 @@ const toNumber = (value: unknown): number | undefined => {
   return Number.isFinite(n) ? Number(n) : undefined;
 };
 
+const toNullableNumber = (value: unknown): number | null | undefined => {
+  if (value === null) return null;
+  return toNumber(value);
+};
+
 const parseJson = (raw: string) => {
   try {
     return JSON.parse(raw);
@@ -75,6 +80,9 @@ export async function POST(req: Request) {
       llm = c.client;
       model = c.model;
     }
+    const providerUsed = forceVisionOpenAI ? "openai" : (String(process.env.LLM_PROVIDER || "openai").toLowerCase());
+    const includeMeta = process.env.NODE_ENV !== "production";
+    const meta = includeMeta ? { _provider: providerUsed, _model: model } : {};
 
     if (!imageBase64 || typeof imageBase64 !== "string") {
       return NextResponse.json(
@@ -109,9 +117,10 @@ If the label is unreadable or missing, respond ONLY with:
 Otherwise respond ONLY as valid JSON:
 {
   "caloriesPerServing": number,
-  "proteinGPerServing": number,
-  "carbsGPerServing": number,
-  "fatGPerServing": number,
+  "proteinGPerServing": number|null,
+  "carbsGPerServing": number|null,
+  "fatGPerServing": number|null,
+  "fiberGPerServing": number|null,
   "servingSizeText": string
 }
 `;
@@ -148,16 +157,18 @@ Otherwise respond ONLY as valid JSON:
       }
 
       const caloriesPerServing = toNumber(parsed?.caloriesPerServing);
-      const proteinGPerServing = toNumber(parsed?.proteinGPerServing);
-      const carbsGPerServing = toNumber(parsed?.carbsGPerServing);
-      const fatGPerServing = toNumber(parsed?.fatGPerServing);
+      const proteinGPerServing = toNullableNumber(parsed?.proteinGPerServing);
+      const carbsGPerServing = toNullableNumber(parsed?.carbsGPerServing);
+      const fatGPerServing = toNullableNumber(parsed?.fatGPerServing);
+      const fiberGPerServing = toNullableNumber(parsed?.fiberGPerServing);
       const servingSizeText = typeof parsed?.servingSizeText === "string" ? parsed.servingSizeText.trim() : "";
 
       if (
         !Number.isFinite(caloriesPerServing) ||
-        !Number.isFinite(proteinGPerServing) ||
-        !Number.isFinite(carbsGPerServing) ||
-        !Number.isFinite(fatGPerServing) ||
+        (proteinGPerServing === undefined || (proteinGPerServing !== null && !Number.isFinite(proteinGPerServing))) ||
+        (carbsGPerServing === undefined || (carbsGPerServing !== null && !Number.isFinite(carbsGPerServing))) ||
+        (fatGPerServing === undefined || (fatGPerServing !== null && !Number.isFinite(fatGPerServing))) ||
+        (fiberGPerServing === undefined || (fiberGPerServing !== null && !Number.isFinite(fiberGPerServing))) ||
         !servingSizeText
       ) {
         return NextResponse.json({ type: "label", error: "unreadable" });
@@ -168,7 +179,9 @@ Otherwise respond ONLY as valid JSON:
         proteinGPerServing,
         carbsGPerServing,
         fatGPerServing,
-        servingSizeText
+        fiberGPerServing,
+        servingSizeText,
+        ...meta
       });
       }
       case "plate": {
@@ -231,7 +244,8 @@ Respond ONLY as valid JSON with this exact shape:
             low: { calories: lowCalories, protein: lowProtein },
             mid: { calories: midCalories, protein: midProtein },
             high: { calories: highCalories, protein: highProtein }
-          }
+          },
+          ...meta
         });
       }
       case "menu": {
@@ -272,11 +286,11 @@ OR
             if (choice == null) return "";
             return String(choice).trim();
           }).filter((choice: string) => Boolean(choice));
-          return NextResponse.json({ type: "menu", choices });
+          return NextResponse.json({ type: "menu", choices, ...meta });
         }
 
         if (typeof parsed?.text === "string" && parsed.text.trim()) {
-          return NextResponse.json({ type: "menu", text: parsed.text.trim() });
+          return NextResponse.json({ type: "menu", text: parsed.text.trim(), ...meta });
         }
 
         return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
@@ -317,7 +331,7 @@ Respond ONLY as valid JSON with this exact shape:
           return String(idea).trim();
         }).filter((idea: string) => Boolean(idea));
 
-        return NextResponse.json({ type: "pantry", ideas });
+        return NextResponse.json({ type: "pantry", ideas, ...meta });
       }
       default:
         return NextResponse.json({ error: "mode must be one of: plate, label, label_extract, menu, pantry" }, { status: 400 });
