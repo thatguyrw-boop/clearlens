@@ -300,7 +300,20 @@ OR
 You are looking at a pantry or fridge photo to suggest meal ideas.
 ${profileLine}
 Respond ONLY as valid JSON with this exact shape:
-{"type":"pantry","ideas":[...]}
+{
+  "type": "pantry",
+  "ideas": [
+    {
+      "title": string,
+      "reason": string
+    }
+  ]
+}
+Rules:
+- return exactly 3 ideas
+- title must be <= 40 characters
+- reason must be <= 16 words
+- if image is low quality or uncertain, still return ideas with cautious reasons (start with "If you have...")
 `;
 
         const completion = await llm.chat.completions.create({
@@ -319,19 +332,44 @@ Respond ONLY as valid JSON with this exact shape:
         });
 
         const raw = completion.choices[0]?.message?.content || "";
-        const parsed = parseJson(raw);
-
-        if (parsed?.type !== "pantry" || !Array.isArray(parsed?.ideas)) {
-          return NextResponse.json({ error: "Invalid pantry response" }, { status: 500 });
+        const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
+        let parsed = parseJson(raw);
+        if (!parsed && extracted) {
+          parsed = parseJson(extracted);
         }
 
-        const ideas = parsed.ideas.map((idea: unknown) => {
-          if (typeof idea === "string") return idea.trim();
-          if (idea == null) return "";
-          return String(idea).trim();
-        }).filter((idea: string) => Boolean(idea));
+        const fallbackIdeas = [
+          { title: "Quick pantry pasta", reason: "If you have pasta, toss with oil, garlic, and any veggies." },
+          { title: "Simple bean salad", reason: "If you have beans, mix with chopped veg and a quick vinaigrette." },
+          { title: "Egg fried rice", reason: "If you have eggs and rice, stir-fry with any leftover vegetables." }
+        ];
 
-        return NextResponse.json({ type: "pantry", ideas, ...meta });
+        const normalizeIdea = (idea: any) => {
+          if (!idea || typeof idea !== "object") return null;
+          let title = typeof idea.title === "string" ? idea.title.trim() : "";
+          let reason = typeof idea.reason === "string" ? idea.reason.trim() : "";
+          if (!title || !reason) return null;
+
+          if (title.length > 40) {
+            title = title.slice(0, 40).trim();
+          }
+
+          const words = reason.split(/\s+/).filter(Boolean);
+          if (words.length > 16) {
+            reason = words.slice(0, 16).join(" ").trim();
+          }
+
+          return { title, reason };
+        };
+
+        if (parsed?.type === "pantry" && Array.isArray(parsed?.ideas)) {
+          const ideas = parsed.ideas.map(normalizeIdea).filter(Boolean);
+          if (ideas.length === 3) {
+            return NextResponse.json({ type: "pantry", ideas });
+          }
+        }
+
+        return NextResponse.json({ type: "pantry", ideas: fallbackIdeas });
       }
       default:
         return NextResponse.json({ error: "mode must be one of: plate, label, label_extract, menu, pantry" }, { status: 400 });
