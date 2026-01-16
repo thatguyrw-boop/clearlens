@@ -48,6 +48,9 @@ const getString = (obj: UnknownRecord, key: string) => {
 
 const getUnknown = (obj: UnknownRecord, key: string) => obj[key];
 
+const isFiniteNumber = (v: unknown): v is number =>
+  typeof v === "number" && Number.isFinite(v);
+
 const parseJson = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
@@ -155,26 +158,29 @@ Otherwise respond ONLY as valid JSON:
 
       const raw = completion.choices[0]?.message?.content || "";
       const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
-      let parsed = parseJson(raw);
-      if (!parsed && extracted) {
-        parsed = parseJson(extracted);
+      let parsedUnknown = parseJson(raw);
+      if (!parsedUnknown && extracted) {
+        parsedUnknown = parseJson(extracted);
       }
+      const parsed = isRecord(parsedUnknown) ? parsedUnknown : undefined;
       if (!parsed) {
         if (debugEnabled) {
           return NextResponse.json({ type: "label", debugRaw: raw });
         }
         return NextResponse.json({ type: "label", error: "unreadable" });
       }
-      if (parsed?.type === "label" && parsed?.error === "unreadable") {
+      const parsedType = getString(parsed, "type");
+      const parsedError = getString(parsed, "error");
+      if (parsedType === "label" && parsedError === "unreadable") {
         return NextResponse.json({ type: "label", error: "unreadable" });
       }
 
-      const caloriesPerServing = toNumber(parsed?.caloriesPerServing);
-      const proteinGPerServing = toNullableNumber(parsed?.proteinGPerServing);
-      const carbsGPerServing = toNullableNumber(parsed?.carbsGPerServing);
-      const fatGPerServing = toNullableNumber(parsed?.fatGPerServing);
-      const fiberGPerServing = toNullableNumber(parsed?.fiberGPerServing);
-      const servingSizeText = typeof parsed?.servingSizeText === "string" ? parsed.servingSizeText.trim() : "";
+      const caloriesPerServing = toNumber(getUnknown(parsed, "caloriesPerServing"));
+      const proteinGPerServing = toNullableNumber(getUnknown(parsed, "proteinGPerServing"));
+      const carbsGPerServing = toNullableNumber(getUnknown(parsed, "carbsGPerServing"));
+      const fatGPerServing = toNullableNumber(getUnknown(parsed, "fatGPerServing"));
+      const fiberGPerServing = toNullableNumber(getUnknown(parsed, "fiberGPerServing"));
+      const servingSizeText = (getString(parsed, "servingSizeText") ?? "").trim();
 
       if (
         !Number.isFinite(caloriesPerServing) ||
@@ -228,19 +234,26 @@ Respond ONLY as valid JSON with this exact shape:
         });
 
         const raw = completion.choices[0]?.message?.content || "";
-        const parsed = parseJson(raw);
-        const low = parsed?.estimate?.low ?? parsed?.estimate?.LOW;
-        const mid = parsed?.estimate?.mid ?? parsed?.estimate?.MID;
-        const high = parsed?.estimate?.high ?? parsed?.estimate?.HIGH;
-        const lowCalories = toNumber(low?.calories);
-        const lowProtein = toNumber(low?.protein);
-        const midCalories = toNumber(mid?.calories);
-        const midProtein = toNumber(mid?.protein);
-        const highCalories = toNumber(high?.calories);
-        const highProtein = toNumber(high?.protein);
+        const parsedUnknown = parseJson(raw);
+        const parsed = isRecord(parsedUnknown) ? parsedUnknown : undefined;
+        const estimateUnknown = parsed ? getUnknown(parsed, "estimate") : undefined;
+        const estimate = isRecord(estimateUnknown) ? estimateUnknown : undefined;
+        const lowUnknown = estimate ? (getUnknown(estimate, "low") ?? getUnknown(estimate, "LOW")) : undefined;
+        const midUnknown = estimate ? (getUnknown(estimate, "mid") ?? getUnknown(estimate, "MID")) : undefined;
+        const highUnknown = estimate ? (getUnknown(estimate, "high") ?? getUnknown(estimate, "HIGH")) : undefined;
+        const low = isRecord(lowUnknown) ? lowUnknown : undefined;
+        const mid = isRecord(midUnknown) ? midUnknown : undefined;
+        const high = isRecord(highUnknown) ? highUnknown : undefined;
+        const lowCalories = toNumber(low ? getUnknown(low, "calories") : undefined);
+        const lowProtein = toNumber(low ? getUnknown(low, "protein") : undefined);
+        const midCalories = toNumber(mid ? getUnknown(mid, "calories") : undefined);
+        const midProtein = toNumber(mid ? getUnknown(mid, "protein") : undefined);
+        const highCalories = toNumber(high ? getUnknown(high, "calories") : undefined);
+        const highProtein = toNumber(high ? getUnknown(high, "protein") : undefined);
+        const parsedType = parsed ? getString(parsed, "type") : undefined;
 
         if (
-          parsed?.type !== "plate" ||
+          parsedType !== "plate" ||
           !Number.isFinite(lowCalories) ||
           !Number.isFinite(lowProtein) ||
           !Number.isFinite(midCalories) ||
@@ -313,20 +326,24 @@ Rules:
 
         const raw = completion.choices[0]?.message?.content || "";
         const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
-        let parsed = parseJson(raw);
-        if (!parsed && extracted) {
-          parsed = parseJson(extracted);
+        let parsedUnknown = parseJson(raw);
+        if (!parsedUnknown && extracted) {
+          parsedUnknown = parseJson(extracted);
         }
+        const parsed = isRecord(parsedUnknown) ? parsedUnknown : undefined;
 
         if (!parsed) {
           return NextResponse.json({ type: "menu", error: "unreadable" });
         }
 
-        if (parsed?.type === "menu" && parsed?.error === "unreadable") {
+        const parsedType = getString(parsed, "type");
+        const parsedError = getString(parsed, "error");
+        if (parsedType === "menu" && parsedError === "unreadable") {
           return NextResponse.json({ type: "menu", error: "unreadable" });
         }
 
-        if (parsed?.type !== "menu" || !Array.isArray(parsed?.choices)) {
+        const choicesUnknown = getUnknown(parsed, "choices");
+        if (parsedType !== "menu" || !Array.isArray(choicesUnknown)) {
           return NextResponse.json({ type: "menu", error: "unreadable" });
         }
 
@@ -344,7 +361,7 @@ Rules:
           return { low, high };
         };
 
-        const choices = parsed.choices.map((choice: unknown) => {
+        const choices = choicesUnknown.map((choice: unknown) => {
           if (!isRecord(choice)) return null;
 
           const title = (getString(choice, "title") ?? "").trim();
@@ -373,16 +390,18 @@ Rules:
             !title ||
             !reason ||
             !orderText ||
-            !Number.isFinite(caloriesLow) ||
-            !Number.isFinite(caloriesHigh) ||
-            !Number.isFinite(proteinLow) ||
-            !Number.isFinite(proteinHigh) ||
-            caloriesLow >= caloriesHigh ||
-            proteinLow >= proteinHigh ||
+            !isFiniteNumber(caloriesLow) ||
+            !isFiniteNumber(caloriesHigh) ||
+            !isFiniteNumber(proteinLow) ||
+            !isFiniteNumber(proteinHigh) ||
             !carbsRange ||
             !fatRange ||
             !fiberRange
           ) {
+            return null;
+          }
+
+          if (caloriesLow >= caloriesHigh || proteinLow >= proteinHigh) {
             return null;
           }
 
@@ -553,24 +572,28 @@ Rules:
 
         const raw = completion.choices[0]?.message?.content || "";
         const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
-        let parsed = parseJson(raw);
-        if (!parsed && extracted) {
-          parsed = parseJson(extracted);
+        let parsedUnknown = parseJson(raw);
+        if (!parsedUnknown && extracted) {
+          parsedUnknown = parseJson(extracted);
         }
+        const parsed = isRecord(parsedUnknown) ? parsedUnknown : undefined;
 
         if (!parsed) {
           return NextResponse.json({ type: "restaurant", error: "unreadable" });
         }
 
-        if (parsed?.type === "restaurant" && parsed?.error === "unreadable") {
+        const parsedType = getString(parsed, "type");
+        const parsedError = getString(parsed, "error");
+        if (parsedType === "restaurant" && parsedError === "unreadable") {
           return NextResponse.json({ type: "restaurant", error: "unreadable" });
         }
 
-        if (parsed?.type !== "restaurant" || !Array.isArray(parsed?.items)) {
+        const itemsUnknown = getUnknown(parsed, "items");
+        if (parsedType !== "restaurant" || !Array.isArray(itemsUnknown)) {
           return NextResponse.json({ type: "restaurant", error: "unreadable" });
         }
 
-        const items = parsed.items.map((item: unknown) => {
+        const items = itemsUnknown.map((item: unknown) => {
           if (!isRecord(item)) return null;
 
           const title = (getString(item, "title") ?? "").trim();
@@ -603,12 +626,10 @@ Rules:
           if (
             !title ||
             !notes ||
-            !Number.isFinite(caloriesLow) ||
-            !Number.isFinite(caloriesHigh) ||
-            !Number.isFinite(proteinLow) ||
-            !Number.isFinite(proteinHigh) ||
-            caloriesLow >= caloriesHigh ||
-            proteinLow >= proteinHigh ||
+            !isFiniteNumber(caloriesLow) ||
+            !isFiniteNumber(caloriesHigh) ||
+            !isFiniteNumber(proteinLow) ||
+            !isFiniteNumber(proteinHigh) ||
             carbsLow === undefined ||
             carbsHigh === undefined ||
             fatLow === undefined ||
@@ -616,12 +637,10 @@ Rules:
             source !== "estimate" ||
             !log ||
             !logDesc ||
-            !Number.isFinite(calLow) ||
-            !Number.isFinite(calHigh) ||
-            !Number.isFinite(protLow) ||
-            !Number.isFinite(protHigh) ||
-            (calLow as number) >= (calHigh as number) ||
-            (protLow as number) >= (protHigh as number) ||
+            !isFiniteNumber(calLow) ||
+            !isFiniteNumber(calHigh) ||
+            !isFiniteNumber(protLow) ||
+            !isFiniteNumber(protHigh) ||
             carbLow === undefined ||
             carbHigh === undefined ||
             logFatLow === undefined ||
@@ -630,13 +649,22 @@ Rules:
             return null;
           }
 
+          if (
+            caloriesLow >= caloriesHigh ||
+            proteinLow >= proteinHigh ||
+            calLow >= calHigh ||
+            protLow >= protHigh
+          ) {
+            return null;
+          }
+
           return {
             title,
             notes,
-            caloriesLow: caloriesLow as number,
-            caloriesHigh: caloriesHigh as number,
-            proteinLow: proteinLow as number,
-            proteinHigh: proteinHigh as number,
+            caloriesLow,
+            caloriesHigh,
+            proteinLow,
+            proteinHigh,
             carbsLow,
             carbsHigh,
             fatLow,
@@ -644,10 +672,10 @@ Rules:
             source: "estimate" as const,
             log: {
               desc: logDesc,
-              calLow: calLow as number,
-              calHigh: calHigh as number,
-              protLow: protLow as number,
-              protHigh: protHigh as number,
+              calLow,
+              calHigh,
+              protLow,
+              protHigh,
               carbLow,
               carbHigh,
               fatLow: logFatLow as number | null,
