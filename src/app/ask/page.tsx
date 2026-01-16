@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import type { Lens } from "@/lib/lenses";
 
 const LENSES: { key: Lens; label: string }[] = [
@@ -61,8 +61,9 @@ export default function AskPage() {
       );
 
       setInsights(results);
-    } catch (e: any) {
-      setError(e.message || "Something went wrong");
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : "Something went wrong";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -126,7 +127,7 @@ export default function AskPage() {
           className="w-full border border-gray-700 p-5 rounded-xl bg-black text-white text-lg resize-none focus:border-white/50 focus:outline-none placeholder-gray-500"
           rows={6}
           value={question}
-          onChange={(e) => setQuestion(e.target.value)}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setQuestion(e.target.value)}
           placeholder="What do you want clarity on?"
         />
 
@@ -141,7 +142,7 @@ export default function AskPage() {
               type="text"
               placeholder="MM / DD / YYYY"
               value={birthDate}
-              onChange={(e) => {
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
                 let value = e.target.value.replace(/\D/g, ""); // Only digits
                 if (value.length > 8) value = value.slice(0, 8);
 
@@ -160,7 +161,7 @@ export default function AskPage() {
               type="text"
               placeholder="Birth time (e.g. 14:30) — optional"
               value={birthTime}
-              onChange={(e) => setBirthTime(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setBirthTime(e.target.value)}
               className="px-5 py-4 bg-black/70 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-white/60 focus:outline-none"
             />
 
@@ -169,7 +170,7 @@ export default function AskPage() {
               type="text"
               placeholder="Birth place (city, country) — optional"
               value={birthPlace}
-              onChange={(e) => setBirthPlace(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setBirthPlace(e.target.value)}
               className="px-5 py-4 bg-black/70 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:border-white/60 focus:outline-none"
             />
           </div>

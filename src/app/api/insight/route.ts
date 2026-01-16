@@ -25,7 +25,7 @@ function getLLMClient() {
   };
 }
 
-const ALLOWED_MODES = new Set(["plate", "label", "label_extract", "menu", "pantry"]);
+const ALLOWED_MODES = new Set(["plate", "label", "label_extract", "menu", "pantry", "restaurant"]);
 
 const toNumber = (value: unknown): number | undefined => {
   const n = typeof value === "string" ? Number(value) : value;
@@ -37,7 +37,18 @@ const toNullableNumber = (value: unknown): number | null | undefined => {
   return toNumber(value);
 };
 
-const parseJson = (raw: string) => {
+type UnknownRecord = Record<string, unknown>;
+
+const isRecord = (v: unknown): v is UnknownRecord => typeof v === "object" && v !== null;
+
+const getString = (obj: UnknownRecord, key: string) => {
+  const v = obj[key];
+  return typeof v === "string" ? v : undefined;
+};
+
+const getUnknown = (obj: UnknownRecord, key: string) => obj[key];
+
+const parseJson = (raw: string): unknown => {
   try {
     return JSON.parse(raw);
   } catch {
@@ -60,7 +71,7 @@ export async function POST(req: Request) {
     const debugEnabled = process.env.NODE_ENV !== "production" || body?.debug === true;
     if (!mode || typeof mode !== "string" || !ALLOWED_MODES.has(mode)) {
       return NextResponse.json(
-        { error: "mode must be one of: plate, label, label_extract, menu, pantry" },
+        { error: "mode must be one of: plate, label, label_extract, menu, pantry, restaurant" },
         { status: 400 }
       );
     }
@@ -84,18 +95,20 @@ export async function POST(req: Request) {
     const includeMeta = process.env.NODE_ENV !== "production";
     const meta = includeMeta ? { _provider: providerUsed, _model: model } : {};
 
-    if (!imageBase64 || typeof imageBase64 !== "string") {
-      return NextResponse.json(
-        { error: "imageBase64 is required" },
-        { status: 400 }
-      );
-    }
+    if (normalizedMode !== "restaurant") {
+      if (!imageBase64 || typeof imageBase64 !== "string") {
+        return NextResponse.json(
+          { error: "imageBase64 is required" },
+          { status: 400 }
+        );
+      }
 
-    if (imageBase64.length > 3_000_000) {
-      return NextResponse.json(
-        { error: "Image too large. Retake closer." },
-        { status: 400 }
-      );
+      if (imageBase64.length > 3_000_000) {
+        return NextResponse.json(
+          { error: "Image too large. Retake closer." },
+          { status: 400 }
+        );
+      }
     }
 
     const profile = typeof userProfile === "object" && userProfile ? userProfile : {};
@@ -252,10 +265,35 @@ Respond ONLY as valid JSON with this exact shape:
         const visionPrompt = `
 You are reading a menu from an image.
 ${profileLine}
-Respond ONLY as valid JSON in one of these forms:
-{"type":"menu","choices":[...]}
-OR
-{"type":"menu","text":"..."}
+Respond ONLY as valid JSON with this exact shape:
+{
+  "type": "menu",
+  "choices": [
+    {
+      "title": string,
+      "reason": string,
+      "orderText": string,
+      "caloriesLow": number,
+      "caloriesHigh": number,
+      "proteinLow": number,
+      "proteinHigh": number,
+      "carbsLow": number|null,
+      "carbsHigh": number|null,
+      "fatLow": number|null,
+      "fatHigh": number|null,
+      "fiberLow": number|null,
+      "fiberHigh": number|null
+    }
+  ]
+}
+
+Rules:
+- Return exactly 3 choices.
+- caloriesLow < caloriesHigh and proteinLow < proteinHigh for each choice.
+- If a macro range is provided, include both low/high and keep low < high; otherwise use null for both.
+- Keep ranges realistic; avoid fake precision.
+- If unreadable, return: { "type": "menu", "error": "unreadable" }
+- No markdown, no extra keys, no extra text.
 `;
 
         const completion = await llm.chat.completions.create({
@@ -274,26 +312,116 @@ OR
         });
 
         const raw = completion.choices[0]?.message?.content || "";
-        const parsed = parseJson(raw);
-
-        if (parsed?.type !== "menu") {
-          return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
+        const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
+        let parsed = parseJson(raw);
+        if (!parsed && extracted) {
+          parsed = parseJson(extracted);
         }
 
-        if (Array.isArray(parsed?.choices)) {
-          const choices = parsed.choices.map((choice: unknown) => {
-            if (typeof choice === "string") return choice.trim();
-            if (choice == null) return "";
-            return String(choice).trim();
-          }).filter((choice: string) => Boolean(choice));
-          return NextResponse.json({ type: "menu", choices, ...meta });
+        if (!parsed) {
+          return NextResponse.json({ type: "menu", error: "unreadable" });
         }
 
-        if (typeof parsed?.text === "string" && parsed.text.trim()) {
-          return NextResponse.json({ type: "menu", text: parsed.text.trim(), ...meta });
+        if (parsed?.type === "menu" && parsed?.error === "unreadable") {
+          return NextResponse.json({ type: "menu", error: "unreadable" });
         }
 
-        return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
+        if (parsed?.type !== "menu" || !Array.isArray(parsed?.choices)) {
+          return NextResponse.json({ type: "menu", error: "unreadable" });
+        }
+
+        const normalizeNullableRange = (lowRaw: unknown, highRaw: unknown) => {
+          const hasLow = lowRaw !== undefined;
+          const hasHigh = highRaw !== undefined;
+          if (!hasLow && !hasHigh) return { low: null, high: null };
+          if (hasLow !== hasHigh) return null;
+          const low = toNullableNumber(lowRaw);
+          const high = toNullableNumber(highRaw);
+          if (low === undefined || high === undefined) return null;
+          if (low === null && high === null) return { low: null, high: null };
+          if (low === null || high === null) return null;
+          if (low >= high) return null;
+          return { low, high };
+        };
+
+        const choices = parsed.choices.map((choice: unknown) => {
+          if (!isRecord(choice)) return null;
+
+          const title = (getString(choice, "title") ?? "").trim();
+          const reason = (getString(choice, "reason") ?? "").trim();
+          const orderText = (getString(choice, "orderText") ?? "").trim();
+
+          const caloriesLow = toNumber(getUnknown(choice, "caloriesLow"));
+          const caloriesHigh = toNumber(getUnknown(choice, "caloriesHigh"));
+          const proteinLow = toNumber(getUnknown(choice, "proteinLow"));
+          const proteinHigh = toNumber(getUnknown(choice, "proteinHigh"));
+
+          const carbsRange = normalizeNullableRange(
+            getUnknown(choice, "carbsLow"),
+            getUnknown(choice, "carbsHigh")
+          );
+          const fatRange = normalizeNullableRange(
+            getUnknown(choice, "fatLow"),
+            getUnknown(choice, "fatHigh")
+          );
+          const fiberRange = normalizeNullableRange(
+            getUnknown(choice, "fiberLow"),
+            getUnknown(choice, "fiberHigh")
+          );
+
+          if (
+            !title ||
+            !reason ||
+            !orderText ||
+            !Number.isFinite(caloriesLow) ||
+            !Number.isFinite(caloriesHigh) ||
+            !Number.isFinite(proteinLow) ||
+            !Number.isFinite(proteinHigh) ||
+            caloriesLow >= caloriesHigh ||
+            proteinLow >= proteinHigh ||
+            !carbsRange ||
+            !fatRange ||
+            !fiberRange
+          ) {
+            return null;
+          }
+
+          return {
+            title,
+            reason,
+            orderText,
+            caloriesLow,
+            caloriesHigh,
+            proteinLow,
+            proteinHigh,
+            carbsLow: carbsRange.low,
+            carbsHigh: carbsRange.high,
+            fatLow: fatRange.low,
+            fatHigh: fatRange.high,
+            fiberLow: fiberRange.low,
+            fiberHigh: fiberRange.high
+          };
+        }).filter(Boolean) as Array<{
+          title: string;
+          reason: string;
+          orderText: string;
+          caloriesLow: number;
+          caloriesHigh: number;
+          proteinLow: number;
+          proteinHigh: number;
+          carbsLow: number | null;
+          carbsHigh: number | null;
+          fatLow: number | null;
+          fatHigh: number | null;
+          fiberLow: number | null;
+          fiberHigh: number | null;
+        }>;
+
+        if (choices.length !== 3) {
+          return NextResponse.json({ type: "menu", error: "unreadable" });
+        }
+
+        return NextResponse.json({ type: "menu", choices, ...meta });
       }
       case "pantry": {
         const pantryPrompt = `
@@ -357,13 +485,220 @@ Rules:
 
         return NextResponse.json(parsed);
       }
+      case "restaurant": {
+        const restaurant = typeof body?.restaurant === "string" ? body.restaurant.trim() : "";
+        const query = typeof body?.query === "string" ? body.query.trim() : "";
+
+        if (!restaurant || !query) {
+          return NextResponse.json(
+            { error: "restaurant and query are required" },
+            { status: 400 }
+          );
+        }
+
+        const restaurantPrompt = `
+You are suggesting restaurant order options with estimated nutrition ranges.
+${profileLine}
+Restaurant: ${restaurant}
+Query: ${query}
+
+Respond ONLY as valid JSON with this exact shape:
+{
+  "type": "restaurant",
+  "restaurant": "string",
+  "items": [
+    {
+      "title": "string",
+      "notes": "string",
+      "caloriesLow": number,
+      "caloriesHigh": number,
+      "proteinLow": number,
+      "proteinHigh": number,
+      "carbsLow": number|null,
+      "carbsHigh": number|null,
+      "fatLow": number|null,
+      "fatHigh": number|null,
+      "source": "estimate",
+      "log": {
+        "desc": "string",
+        "calLow": number,
+        "calHigh": number,
+        "protLow": number,
+        "protHigh": number,
+        "carbLow": number|null,
+        "carbHigh": number|null,
+        "fatLow": number|null,
+        "fatHigh": number|null
+      }
+    }
+  ]
+}
+
+Rules:
+- Return exactly 3 items.
+- caloriesLow < caloriesHigh and proteinLow < proteinHigh for each item.
+- Use estimated ranges (no web sources); include "source":"estimate" on each item.
+- No markdown, no extra keys, no extra text.
+- If you cannot comply, return: { "type": "restaurant", "error": "unreadable" }
+`;
+
+        const completion = await llm.chat.completions.create({
+          model,
+          temperature: 0.2,
+          max_tokens: 500,
+          messages: [
+            { role: "user", content: restaurantPrompt }
+          ]
+        });
+
+        const raw = completion.choices[0]?.message?.content || "";
+        const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
+        let parsed = parseJson(raw);
+        if (!parsed && extracted) {
+          parsed = parseJson(extracted);
+        }
+
+        if (!parsed) {
+          return NextResponse.json({ type: "restaurant", error: "unreadable" });
+        }
+
+        if (parsed?.type === "restaurant" && parsed?.error === "unreadable") {
+          return NextResponse.json({ type: "restaurant", error: "unreadable" });
+        }
+
+        if (parsed?.type !== "restaurant" || !Array.isArray(parsed?.items)) {
+          return NextResponse.json({ type: "restaurant", error: "unreadable" });
+        }
+
+        const items = parsed.items.map((item: unknown) => {
+          if (!isRecord(item)) return null;
+
+          const title = (getString(item, "title") ?? "").trim();
+          const notes = (getString(item, "notes") ?? "").trim();
+
+          const caloriesLow = toNumber(getUnknown(item, "caloriesLow"));
+          const caloriesHigh = toNumber(getUnknown(item, "caloriesHigh"));
+          const proteinLow = toNumber(getUnknown(item, "proteinLow"));
+          const proteinHigh = toNumber(getUnknown(item, "proteinHigh"));
+
+          const carbsLow = toNullableNumber(getUnknown(item, "carbsLow"));
+          const carbsHigh = toNullableNumber(getUnknown(item, "carbsHigh"));
+          const fatLow = toNullableNumber(getUnknown(item, "fatLow"));
+          const fatHigh = toNullableNumber(getUnknown(item, "fatHigh"));
+
+          const source = getUnknown(item, "source");
+          const logUnknown = getUnknown(item, "log");
+          const log = isRecord(logUnknown) ? logUnknown : undefined;
+
+          const logDesc = log ? (getString(log, "desc") ?? "").trim() : "";
+          const calLow = log ? toNumber(getUnknown(log, "calLow")) : undefined;
+          const calHigh = log ? toNumber(getUnknown(log, "calHigh")) : undefined;
+          const protLow = log ? toNumber(getUnknown(log, "protLow")) : undefined;
+          const protHigh = log ? toNumber(getUnknown(log, "protHigh")) : undefined;
+          const carbLow = log ? toNullableNumber(getUnknown(log, "carbLow")) : undefined;
+          const carbHigh = log ? toNullableNumber(getUnknown(log, "carbHigh")) : undefined;
+          const logFatLow = log ? toNullableNumber(getUnknown(log, "fatLow")) : undefined;
+          const logFatHigh = log ? toNullableNumber(getUnknown(log, "fatHigh")) : undefined;
+
+          if (
+            !title ||
+            !notes ||
+            !Number.isFinite(caloriesLow) ||
+            !Number.isFinite(caloriesHigh) ||
+            !Number.isFinite(proteinLow) ||
+            !Number.isFinite(proteinHigh) ||
+            caloriesLow >= caloriesHigh ||
+            proteinLow >= proteinHigh ||
+            carbsLow === undefined ||
+            carbsHigh === undefined ||
+            fatLow === undefined ||
+            fatHigh === undefined ||
+            source !== "estimate" ||
+            !log ||
+            !logDesc ||
+            !Number.isFinite(calLow) ||
+            !Number.isFinite(calHigh) ||
+            !Number.isFinite(protLow) ||
+            !Number.isFinite(protHigh) ||
+            (calLow as number) >= (calHigh as number) ||
+            (protLow as number) >= (protHigh as number) ||
+            carbLow === undefined ||
+            carbHigh === undefined ||
+            logFatLow === undefined ||
+            logFatHigh === undefined
+          ) {
+            return null;
+          }
+
+          return {
+            title,
+            notes,
+            caloriesLow: caloriesLow as number,
+            caloriesHigh: caloriesHigh as number,
+            proteinLow: proteinLow as number,
+            proteinHigh: proteinHigh as number,
+            carbsLow,
+            carbsHigh,
+            fatLow,
+            fatHigh,
+            source: "estimate" as const,
+            log: {
+              desc: logDesc,
+              calLow: calLow as number,
+              calHigh: calHigh as number,
+              protLow: protLow as number,
+              protHigh: protHigh as number,
+              carbLow,
+              carbHigh,
+              fatLow: logFatLow as number | null,
+              fatHigh: logFatHigh as number | null
+            }
+          };
+        }).filter(Boolean) as Array<{
+          title: string;
+          notes: string;
+          caloriesLow: number;
+          caloriesHigh: number;
+          proteinLow: number;
+          proteinHigh: number;
+          carbsLow: number | null;
+          carbsHigh: number | null;
+          fatLow: number | null;
+          fatHigh: number | null;
+          source: "estimate";
+          log: {
+            desc: string;
+            calLow: number;
+            calHigh: number;
+            protLow: number;
+            protHigh: number;
+            carbLow: number | null;
+            carbHigh: number | null;
+            fatLow: number | null;
+            fatHigh: number | null;
+          };
+        }>;
+
+        if (items.length !== 3) {
+          return NextResponse.json({ type: "restaurant", error: "unreadable" });
+        }
+
+        return NextResponse.json({
+          type: "restaurant",
+          restaurant,
+          items
+        });
+      }
       default:
-        return NextResponse.json({ error: "mode must be one of: plate, label, label_extract, menu, pantry" }, { status: 400 });
+        return NextResponse.json({ error: "mode must be one of: plate, label, label_extract, menu, pantry, restaurant" }, { status: 400 });
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Insight API error:', error);
-    const message = typeof error?.message === "string" ? error.message : "Failed to generate insight";
+    const message =
+      typeof (error as { message?: unknown } | null | undefined)?.message === "string"
+        ? String((error as { message?: unknown }).message)
+        : "Failed to generate insight";
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
