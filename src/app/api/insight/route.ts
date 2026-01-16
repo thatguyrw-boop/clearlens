@@ -401,7 +401,13 @@ Rules:
             return null;
           }
 
-          if (caloriesLow >= caloriesHigh || proteinLow >= proteinHigh) {
+          // Ensure TS sees these as numbers after the isFiniteNumber guards above
+          const caloriesLowN = caloriesLow;
+          const caloriesHighN = caloriesHigh;
+          const proteinLowN = proteinLow;
+          const proteinHighN = proteinHigh;
+
+          if (caloriesLowN >= caloriesHighN || proteinLowN >= proteinHighN) {
             return null;
           }
 
@@ -649,11 +655,21 @@ Rules:
             return null;
           }
 
+          // Ensure TS sees these as numbers after the isFiniteNumber guards above
+          const caloriesLowN = caloriesLow;
+          const caloriesHighN = caloriesHigh;
+          const proteinLowN = proteinLow;
+          const proteinHighN = proteinHigh;
+          const calLowN = calLow;
+          const calHighN = calHigh;
+          const protLowN = protLow;
+          const protHighN = protHigh;
+
           if (
-            caloriesLow >= caloriesHigh ||
-            proteinLow >= proteinHigh ||
-            calLow >= calHigh ||
-            protLow >= protHigh
+            caloriesLowN >= caloriesHighN ||
+            proteinLowN >= proteinHighN ||
+            calLowN >= calHighN ||
+            protLowN >= protHighN
           ) {
             return null;
           }
