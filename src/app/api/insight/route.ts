@@ -296,35 +296,48 @@ OR
         return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
       }
       case "pantry": {
-        const visionPrompt = `
-You are looking at a pantry or fridge photo to suggest meal ideas.
-${profileLine}
-Respond ONLY as valid JSON with this exact shape:
+        const pantryPrompt = `
+You are analyzing a photo of a pantry or fridge.
+
+Task:
+- Identify ONLY clear staple items you can see.
+- Suggest EXACTLY 3 practical snack or meal ideas.
+- Each idea must be realistic, quick, and goal-aligned.
+- Include calorie and protein ranges (low/high).
+
+Output JSON ONLY in this exact format:
+
 {
   "type": "pantry",
   "ideas": [
     {
-      "title": string,
-      "reason": string
+      "title": "string",
+      "reason": "string",
+      "caloriesLow": number,
+      "caloriesHigh": number,
+      "proteinLow": number,
+      "proteinHigh": number,
+      "logDesc": "string"
     }
   ]
 }
+
 Rules:
-- return exactly 3 ideas
-- title must be <= 40 characters
-- reason must be <= 16 words
-- if image is low quality or uncertain, still return ideas with cautious reasons (start with "If you have...")
+- Do NOT include markdown.
+- Do NOT include explanations outside JSON.
+- If photo is unreadable, return:
+  { "type": "pantry", "error": "unreadable" }
 `;
 
         const completion = await llm.chat.completions.create({
           model,
-          temperature: 0,
-          max_tokens: 240,
+          temperature: 0.3,
+          max_tokens: 300,
           messages: [
             {
               role: "user",
               content: [
-                { type: "text", text: visionPrompt },
+                { type: "text", text: pantryPrompt },
                 { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
               ]
             }
@@ -332,44 +345,17 @@ Rules:
         });
 
         const raw = completion.choices[0]?.message?.content || "";
-        const extracted = raw.match(/\{[\s\S]*\}/)?.[0];
-        let parsed = parseJson(raw);
-        if (!parsed && extracted) {
-          parsed = parseJson(extracted);
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          return NextResponse.json(
+            { type: "pantry", error: "unreadable" },
+            { status: 200 }
+          );
         }
 
-        const fallbackIdeas = [
-          { title: "Quick pantry pasta", reason: "If you have pasta, toss with oil, garlic, and any veggies." },
-          { title: "Simple bean salad", reason: "If you have beans, mix with chopped veg and a quick vinaigrette." },
-          { title: "Egg fried rice", reason: "If you have eggs and rice, stir-fry with any leftover vegetables." }
-        ];
-
-        const normalizeIdea = (idea: any) => {
-          if (!idea || typeof idea !== "object") return null;
-          let title = typeof idea.title === "string" ? idea.title.trim() : "";
-          let reason = typeof idea.reason === "string" ? idea.reason.trim() : "";
-          if (!title || !reason) return null;
-
-          if (title.length > 40) {
-            title = title.slice(0, 40).trim();
-          }
-
-          const words = reason.split(/\s+/).filter(Boolean);
-          if (words.length > 16) {
-            reason = words.slice(0, 16).join(" ").trim();
-          }
-
-          return { title, reason };
-        };
-
-        if (parsed?.type === "pantry" && Array.isArray(parsed?.ideas)) {
-          const ideas = parsed.ideas.map(normalizeIdea).filter(Boolean);
-          if (ideas.length === 3) {
-            return NextResponse.json({ type: "pantry", ideas });
-          }
-        }
-
-        return NextResponse.json({ type: "pantry", ideas: fallbackIdeas });
+        return NextResponse.json(parsed);
       }
       default:
         return NextResponse.json({ error: "mode must be one of: plate, label, label_extract, menu, pantry" }, { status: 400 });
