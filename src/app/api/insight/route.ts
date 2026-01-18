@@ -152,6 +152,7 @@ Return ONLY valid JSON with this exact shape:
 {
   "insight": string,
   "label": {
+    "title": string|null,
     "caloriesPerServing": number,
     "proteinGPerServing": number,
     "carbsGPerServing": number,
@@ -166,6 +167,7 @@ Return ONLY valid JSON with this exact shape:
     "primaryUnit": "g"|"ml"|"fl_oz"|"serving"
   }
 }
+Title should be 2-5 words from front/package text. Use null if not found.
 Optional fields may be omitted if not visible.
 `;
 
@@ -202,6 +204,19 @@ Optional fields may be omitted if not visible.
       const carbsGPerServing = toNullableNumber(carbsRaw);
       const fatGPerServing = toNullableNumber(fatRaw);
       const fiberGPerServing = toNullableNumber(fiberRaw);
+      const titleRaw = label ? getUnknown(label, "title") : undefined;
+      let title: string | null | undefined;
+      let titleInvalid = false;
+      if (titleRaw !== undefined) {
+        if (titleRaw === null) {
+          title = null;
+        } else if (typeof titleRaw === "string") {
+          const trimmedTitle = titleRaw.trim();
+          title = trimmedTitle ? trimmedTitle : null;
+        } else {
+          titleInvalid = true;
+        }
+      }
       const servingSizeText = (getString(label ?? {}, "servingSizeText") ?? "").trim();
       const servingSizeGramsRaw = label ? getUnknown(label, "servingSizeGrams") : undefined;
       const servingSizeMlRaw = label ? getUnknown(label, "servingSizeMl") : undefined;
@@ -237,6 +252,7 @@ Optional fields may be omitted if not visible.
         !Number.isFinite(caloriesPerServing) ||
         !Number.isFinite(proteinGPerServing) ||
         !servingSizeText ||
+        titleInvalid ||
         isLiquidInvalid ||
         primaryUnitInvalid
       ) {
@@ -271,6 +287,7 @@ Optional fields may be omitted if not visible.
         label: {
           caloriesPerServing,
           proteinGPerServing,
+          ...(title !== undefined ? { title } : {}),
           ...(carbsGPerServing !== undefined && carbsGPerServing !== null ? { carbsGPerServing } : {}),
           ...(fatGPerServing !== undefined && fatGPerServing !== null ? { fatGPerServing } : {}),
           ...(fiberGPerServing !== undefined && fiberGPerServing !== null ? { fiberGPerServing } : {}),
