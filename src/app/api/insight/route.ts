@@ -25,7 +25,7 @@ function getLLMClient() {
   };
 }
 
-const ALLOWED_INTENTS = new Set(["plate", "label", "menu", "pantry", "chat", "estimate_text"]);
+const ALLOWED_INTENTS = new Set(["plate", "label", "label_extract", "menu", "pantry", "chat", "estimate_text"]);
 
 const toNumber = (value: unknown): number | undefined => {
   const n = typeof value === "string" ? Number(value) : value;
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
     const { intent, imageBase64 } = body ?? {};
     if (!intent || typeof intent !== "string" || !ALLOWED_INTENTS.has(intent)) {
       return NextResponse.json(
-        { error: "intent must be one of: plate, label, menu, pantry, chat, estimate_text" },
+        { error: "intent must be one of: plate, label, label_extract, menu, pantry, chat, estimate_text" },
         { status: 400 }
       );
     }
@@ -105,7 +105,7 @@ export async function POST(req: Request) {
     const userMemory = isRecord(body?.userMemory) ? body.userMemory : undefined;
     const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory : undefined;
 
-    const needsImage = ["label", "plate", "menu", "pantry"].includes(intent);
+    const needsImage = ["label", "label_extract", "plate", "menu", "pantry"].includes(intent);
     const forceVisionOpenAI = needsImage;
     let llm: OpenAI;
     let model: string;
@@ -147,6 +147,55 @@ export async function POST(req: Request) {
     switch (intent) {
       case "label": {
         const visionPrompt = `
+From this package photo, extract the product name/title (2-6 words).
+If not readable, return null.
+Reply as JSON: { "insight": string, "label": { "title": string|null } }
+`;
+
+        const completion = await llm.chat.completions.create({
+          model,
+          temperature: 0,
+          max_tokens: 120,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: visionPrompt },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
+              ]
+            }
+          ]
+        });
+
+        const raw = completion.choices[0]?.message?.content || "";
+        const parsed = parseJsonFromResponse(raw);
+        if (!parsed) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        const insight = (getString(parsed, "insight") ?? "").trim();
+        const labelUnknown = getUnknown(parsed, "label");
+        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
+        const titleRaw = label ? getUnknown(label, "title") : undefined;
+        let title: string | null | undefined;
+        let titleInvalid = false;
+        if (titleRaw === null) {
+          title = null;
+        } else if (typeof titleRaw === "string") {
+          const trimmedTitle = titleRaw.trim();
+          title = trimmedTitle ? trimmedTitle : null;
+        } else {
+          titleInvalid = true;
+        }
+
+        if (!insight || titleInvalid || title === undefined) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        return NextResponse.json({ insight, label: { title } });
+      }
+      case "label_extract": {
+        const visionPrompt = `
 You are reading a Nutrition Facts label.
 Return ONLY valid JSON with this exact shape:
 {
@@ -168,6 +217,7 @@ Return ONLY valid JSON with this exact shape:
   }
 }
 Title should be 2-5 words from front/package text. Use null if not found.
+Also extract a short product name/title if visible on the package (2-6 words). If not visible, title=null.
 Optional fields may be omitted if not visible.
 `;
 
@@ -630,7 +680,10 @@ Respond with only that line.
         return NextResponse.json({ insight: raw });
       }
       default:
-        return NextResponse.json({ error: "intent must be one of: plate, label, menu, pantry, chat, estimate_text" }, { status: 400 });
+        return NextResponse.json(
+          { error: "intent must be one of: plate, label, label_extract, menu, pantry, chat, estimate_text" },
+          { status: 400 }
+        );
     }
 
   } catch (error: unknown) {
