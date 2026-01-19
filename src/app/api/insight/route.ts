@@ -85,11 +85,12 @@ const normalizeOptionalRange = (lowRaw: unknown, highRaw: unknown) => {
   const hasHigh = highRaw !== undefined && highRaw !== null;
   if (!hasLow && !hasHigh) return { low: null, high: null };
   if (hasLow !== hasHigh) return null;
-  const low = toNumber(lowRaw);
-  const high = toNumber(highRaw);
-  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
-  if (low >= high) return null;
-  return { low, high };
+  const lowN = toNumber(lowRaw);
+  const highN = toNumber(highRaw);
+  if (lowN == null || highN == null) return null;
+  if (!Number.isFinite(lowN) || !Number.isFinite(highN)) return null;
+  if (lowN >= highN) return null;
+  return { low: lowN, high: highN };
 };
 
 export async function POST(req: Request) {
