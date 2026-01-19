@@ -25,7 +25,16 @@ function getLLMClient() {
   };
 }
 
-const ALLOWED_INTENTS = new Set(["plate", "label", "label_extract", "menu", "pantry", "chat", "estimate_text"]);
+const ALLOWED_INTENTS = new Set([
+  "plate",
+  "label",
+  "label_extract",
+  "label_name",
+  "menu",
+  "pantry",
+  "chat",
+  "estimate_text"
+]);
 
 const toNumber = (value: unknown): number | undefined => {
   const n = typeof value === "string" ? Number(value) : value;
@@ -97,7 +106,7 @@ export async function POST(req: Request) {
     const { intent, imageBase64 } = body ?? {};
     if (!intent || typeof intent !== "string" || !ALLOWED_INTENTS.has(intent)) {
       return NextResponse.json(
-        { error: "intent must be one of: plate, label, label_extract, menu, pantry, chat, estimate_text" },
+        { error: "intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
         { status: 400 }
       );
     }
@@ -105,7 +114,7 @@ export async function POST(req: Request) {
     const userMemory = isRecord(body?.userMemory) ? body.userMemory : undefined;
     const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory : undefined;
 
-    const needsImage = ["label", "label_extract", "plate", "menu", "pantry"].includes(intent);
+    const needsImage = ["label", "label_extract", "label_name", "plate", "menu", "pantry"].includes(intent);
     const forceVisionOpenAI = needsImage;
     let llm: OpenAI;
     let model: string;
@@ -199,6 +208,59 @@ Return ONLY strict JSON:
         }
 
         return NextResponse.json({ insight, label: { title } });
+      }
+      case "label_name": {
+        const PROMPT = `
+Extract the product title from this package photo using the LARGEST visible text.
+Return 2–12 words (brand + product). Example: "Quest Tortilla Style Protein Chips".
+Return ONLY strict JSON:
+{ "insight": string, "label": { "title": string | null } }
+`;
+
+        const imageDataUrl = imageBase64.startsWith("data:")
+          ? imageBase64
+          : `data:image/jpeg;base64,${imageBase64}`;
+        const completion = await llm.chat.completions.create({
+          model: "gpt-4o",
+          temperature: 0.1,
+          max_tokens: 120,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: PROMPT },
+                { type: "image_url", image_url: { url: imageDataUrl } }
+              ]
+            }
+          ]
+        });
+
+        const raw = completion.choices[0]?.message?.content || "";
+        const parsed = parseJsonFromResponse(raw);
+        if (!parsed) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        const insight = (getString(parsed, "insight") ?? "").trim();
+        const labelUnknown = getUnknown(parsed, "label");
+        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
+        const titleRaw = label ? getUnknown(label, "title") : undefined;
+        let title: string | null | undefined;
+        let titleInvalid = false;
+        if (titleRaw === null) {
+          title = null;
+        } else if (typeof titleRaw === "string") {
+          const trimmedTitle = titleRaw.trim();
+          title = trimmedTitle ? trimmedTitle : null;
+        } else {
+          titleInvalid = true;
+        }
+
+        if (!insight || titleInvalid || title === undefined) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        return NextResponse.json({ insight, label: { title }, debugIntent: intent });
       }
       case "label_extract": {
         const visionPrompt = `
@@ -687,7 +749,7 @@ Respond with only that line.
       }
       default:
         return NextResponse.json(
-          { error: "intent must be one of: plate, label, label_extract, menu, pantry, chat, estimate_text" },
+          { error: "intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
           { status: 400 }
         );
     }
