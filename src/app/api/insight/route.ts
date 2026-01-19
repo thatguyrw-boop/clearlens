@@ -146,28 +146,34 @@ export async function POST(req: Request) {
 
     switch (intent) {
       case "label": {
-        const visionPrompt = `
+        const VISION_PROMPT_STRING = `
 Look at this product/package photo.
-Extract the product title as it appears on the package using the LARGEST visible text.
-Return 2–10 words, Title Case, no quotes.
-If there is a brand and product name, include both (e.g., 'Quest Tortilla Style Protein Chips').
-Ignore nutrition facts numbers unless they are part of the product name.
+Extract the product title using the LARGEST visible text on the package.
+Return 2–12 words, keep brand + product name if visible.
+Examples:
+- "Quest Tortilla Style Protein Chips"
+- "Cheddar Crackers"
+Ignore nutrition facts numbers unless part of name.
 If unreadable, return null.
 
-Respond ONLY as strict JSON:
+Return ONLY strict JSON:
 { "insight": string, "label": { "title": string | null } }
 `;
 
+        const imageDataUrl = imageBase64.startsWith("data:")
+          ? imageBase64
+          : `data:image/jpeg;base64,${imageBase64}`;
+        const visionModel = process.env.OPENAI_VISION_MODEL || "gpt-4o-mini";
         const completion = await llm.chat.completions.create({
-          model,
+          model: visionModel,
           temperature: 0.1,
-          max_tokens: 80,
+          max_tokens: 120,
           messages: [
             {
               role: "user",
               content: [
-                { type: "text", text: visionPrompt },
-                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
+                { type: "text", text: VISION_PROMPT_STRING },
+                { type: "image_url", image_url: { url: imageDataUrl } }
               ]
             }
           ]
