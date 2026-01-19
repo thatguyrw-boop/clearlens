@@ -95,6 +95,8 @@ const normalizeOptionalRange = (lowRaw: unknown, highRaw: unknown) => {
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
+    const mode = body.mode ?? body.intent;
+    const labelTask = body.labelTask;
 
     const question = typeof body?.question === "string" ? body.question.trim() : "";
     if (question.toLowerCase() === "version") {
@@ -103,10 +105,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)} provider:${p}` });
     }
 
-    const { intent, imageBase64 } = body ?? {};
-    if (!intent || typeof intent !== "string" || !ALLOWED_INTENTS.has(intent)) {
+    const { imageBase64 } = body ?? {};
+    if (!mode || typeof mode !== "string" || !ALLOWED_INTENTS.has(mode)) {
       return NextResponse.json(
-        { error: "intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
+        { error: "mode/intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
         { status: 400 }
       );
     }
@@ -114,7 +116,7 @@ export async function POST(req: Request) {
     const userMemory = isRecord(body?.userMemory) ? body.userMemory : undefined;
     const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory : undefined;
 
-    const needsImage = ["label", "label_extract", "label_name", "plate", "menu", "pantry"].includes(intent);
+    const needsImage = ["label", "label_extract", "label_name", "plate", "menu", "pantry"].includes(mode);
     const forceVisionOpenAI = needsImage;
     let llm: OpenAI;
     let model: string;
@@ -153,117 +155,8 @@ export async function POST(req: Request) {
     const historyLine = chatHistory ? `Chat history JSON: ${JSON.stringify(chatHistory)}.` : "Chat history: none.";
     const questionLine = question ? `User question: ${question}` : "User question: none.";
 
-    switch (intent) {
-      case "label": {
-        const PROMPT = `
-Extract the product title from this package photo using the LARGEST visible text.
-Return 2–12 words. Include brand + product if visible.
-Example: "Quest Tortilla Style Protein Chips"
-Return ONLY strict JSON:
-{ "insight": string, "label": { "title": string | null } }
-`;
-
-        const imageDataUrl = imageBase64.startsWith("data:")
-          ? imageBase64
-          : `data:image/jpeg;base64,${imageBase64}`;
-        const visionModel = process.env.OPENAI_VISION_MODEL || "gpt-4o";
-        const completion = await llm.chat.completions.create({
-          model: visionModel,
-          temperature: 0.1,
-          max_tokens: 120,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: PROMPT },
-                { type: "image_url", image_url: { url: imageDataUrl } }
-              ]
-            }
-          ]
-        });
-
-        const raw = completion.choices[0]?.message?.content || "";
-        const parsed = parseJsonFromResponse(raw);
-        if (!parsed) {
-          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
-        }
-
-        const insight = (getString(parsed, "insight") ?? "").trim();
-        const labelUnknown = getUnknown(parsed, "label");
-        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
-        const titleRaw = label ? getUnknown(label, "title") : undefined;
-        let title: string | null | undefined;
-        let titleInvalid = false;
-        if (titleRaw === null) {
-          title = null;
-        } else if (typeof titleRaw === "string") {
-          const trimmedTitle = titleRaw.trim();
-          title = trimmedTitle ? trimmedTitle : null;
-        } else {
-          titleInvalid = true;
-        }
-
-        if (!insight || titleInvalid || title === undefined) {
-          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
-        }
-
-        return NextResponse.json({ insight, label: { title } });
-      }
-      case "label_name": {
-        const PROMPT = `
-Extract the product title from this package photo using the LARGEST visible text.
-Return 2–12 words (brand + product). Example: "Quest Tortilla Style Protein Chips".
-Return ONLY strict JSON:
-{ "insight": string, "label": { "title": string | null } }
-`;
-
-        const imageDataUrl = imageBase64.startsWith("data:")
-          ? imageBase64
-          : `data:image/jpeg;base64,${imageBase64}`;
-        const completion = await llm.chat.completions.create({
-          model: "gpt-4o",
-          temperature: 0.1,
-          max_tokens: 120,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: PROMPT },
-                { type: "image_url", image_url: { url: imageDataUrl } }
-              ]
-            }
-          ]
-        });
-
-        const raw = completion.choices[0]?.message?.content || "";
-        const parsed = parseJsonFromResponse(raw);
-        if (!parsed) {
-          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
-        }
-
-        const insight = (getString(parsed, "insight") ?? "").trim();
-        const labelUnknown = getUnknown(parsed, "label");
-        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
-        const titleRaw = label ? getUnknown(label, "title") : undefined;
-        let title: string | null | undefined;
-        let titleInvalid = false;
-        if (titleRaw === null) {
-          title = null;
-        } else if (typeof titleRaw === "string") {
-          const trimmedTitle = titleRaw.trim();
-          title = trimmedTitle ? trimmedTitle : null;
-        } else {
-          titleInvalid = true;
-        }
-
-        if (!insight || titleInvalid || title === undefined) {
-          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
-        }
-
-        return NextResponse.json({ insight, label: { title }, debugIntent: intent });
-      }
-      case "label_extract": {
-        const visionPrompt = `
+    const handleLabelExtract = async () => {
+      const visionPrompt = `
 You are reading a Nutrition Facts label.
 Return ONLY valid JSON with this exact shape:
 {
@@ -418,6 +311,125 @@ Optional fields may be omitted if not visible.
           ...(primaryUnit !== undefined ? { primaryUnit } : {})
         }
       });
+    };
+
+    switch (mode) {
+      case "label": {
+        if (labelTask && labelTask !== "title") {
+          if (labelTask === "extract") {
+            return await handleLabelExtract();
+          }
+          return NextResponse.json(
+            { error: "labelTask must be 'title' or 'extract' for label mode" },
+            { status: 400 }
+          );
+        }
+        const PROMPT = `
+Extract the product title from this package photo using the LARGEST visible text.
+Return 2–12 words. Include brand + product if visible.
+Example: "Quest Tortilla Style Protein Chips"
+Return ONLY strict JSON:
+{ "insight": string, "label": { "title": string | null } }
+`;
+
+        const visionModel = process.env.OPENAI_VISION_MODEL || "gpt-4o";
+        const completion = await llm.chat.completions.create({
+          model: visionModel,
+          temperature: 0.1,
+          max_tokens: 120,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: PROMPT },
+                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageBase64}` } }
+              ]
+            }
+          ]
+        });
+
+        const raw = completion.choices[0]?.message?.content || "";
+        const parsed = parseJsonFromResponse(raw);
+        if (!parsed) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        const insight = (getString(parsed, "insight") ?? "").trim();
+        const labelUnknown = getUnknown(parsed, "label");
+        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
+        const titleRaw = label ? getUnknown(label, "title") : undefined;
+        let title: string | null | undefined;
+        let titleInvalid = false;
+        if (titleRaw === null) {
+          title = null;
+        } else if (typeof titleRaw === "string") {
+          const trimmedTitle = titleRaw.trim();
+          title = trimmedTitle ? trimmedTitle : null;
+        } else {
+          titleInvalid = true;
+        }
+
+        if (!insight || titleInvalid || title === undefined) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        return NextResponse.json({ insight, label: { title } });
+      }
+      case "label_name": {
+        const PROMPT = `
+Extract the product title from this package photo using the LARGEST visible text.
+Return 2–12 words (brand + product). Example: "Quest Tortilla Style Protein Chips".
+Return ONLY strict JSON:
+{ "insight": string, "label": { "title": string | null } }
+`;
+
+        const imageDataUrl = imageBase64.startsWith("data:")
+          ? imageBase64
+          : `data:image/jpeg;base64,${imageBase64}`;
+        const completion = await llm.chat.completions.create({
+          model: "gpt-4o",
+          temperature: 0.1,
+          max_tokens: 120,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: PROMPT },
+                { type: "image_url", image_url: { url: imageDataUrl } }
+              ]
+            }
+          ]
+        });
+
+        const raw = completion.choices[0]?.message?.content || "";
+        const parsed = parseJsonFromResponse(raw);
+        if (!parsed) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        const insight = (getString(parsed, "insight") ?? "").trim();
+        const labelUnknown = getUnknown(parsed, "label");
+        const label = isRecord(labelUnknown) ? labelUnknown : undefined;
+        const titleRaw = label ? getUnknown(label, "title") : undefined;
+        let title: string | null | undefined;
+        let titleInvalid = false;
+        if (titleRaw === null) {
+          title = null;
+        } else if (typeof titleRaw === "string") {
+          const trimmedTitle = titleRaw.trim();
+          title = trimmedTitle ? trimmedTitle : null;
+        } else {
+          titleInvalid = true;
+        }
+
+        if (!insight || titleInvalid || title === undefined) {
+          return NextResponse.json({ error: "Invalid label response" }, { status: 500 });
+        }
+
+        return NextResponse.json({ insight, label: { title }, debugIntent: mode });
+      }
+      case "label_extract": {
+        return await handleLabelExtract();
       }
       case "plate": {
         const visionPrompt = `
@@ -749,7 +761,7 @@ Respond with only that line.
       }
       default:
         return NextResponse.json(
-          { error: "intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
+          { error: "mode/intent must be one of: plate, label, label_extract, label_name, menu, pantry, chat, estimate_text" },
           { status: 400 }
         );
     }
