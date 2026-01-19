@@ -147,13 +147,21 @@ export async function POST(req: Request) {
     switch (intent) {
       case "label": {
         const visionPrompt = `
-Extract the product name/title from this package photo (2-8 words). If not readable, return null. Respond ONLY as JSON: { insight, label: { title } }
+Look at this product/package photo.
+Extract the product title as it appears on the package using the LARGEST visible text.
+Return 2–10 words, Title Case, no quotes.
+If there is a brand and product name, include both (e.g., 'Quest Tortilla Style Protein Chips').
+Ignore nutrition facts numbers unless they are part of the product name.
+If unreadable, return null.
+
+Respond ONLY as strict JSON:
+{ "insight": string, "label": { "title": string | null } }
 `;
 
         const completion = await llm.chat.completions.create({
           model,
-          temperature: 0,
-          max_tokens: 120,
+          temperature: 0.1,
+          max_tokens: 80,
           messages: [
             {
               role: "user",
