@@ -147,9 +147,7 @@ export async function POST(req: Request) {
     switch (intent) {
       case "label": {
         const visionPrompt = `
-From this package photo, extract the product name/title (2-6 words).
-If not readable, return null.
-Reply as JSON: { "insight": string, "label": { "title": string|null } }
+Extract the product name/title from this package photo (2-8 words). If not readable, return null. Respond ONLY as JSON: { insight, label: { title } }
 `;
 
         const completion = await llm.chat.completions.create({
