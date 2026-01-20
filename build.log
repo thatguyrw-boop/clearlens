@@ -1,0 +1,23 @@
+
+> clearlens@0.1.0 build
+> next build
+
+   ▲ Next.js 16.0.10 (Turbopack)
+   - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 1809.8ms
+   Running TypeScript ...
+Failed to compile.
+
+./src/app/api/insight/route.ts:91:7
+Type error: 'low' is possibly 'undefined'.
+
+[0m [90m 89 |[39m   [36mconst[39m high [33m=[39m toNumber(highRaw)[33m;[39m
+ [90m 90 |[39m   [36mif[39m ([33m![39m[33mNumber[39m[33m.[39misFinite(low) [33m||[39m [33m![39m[33mNumber[39m[33m.[39misFinite(high)) [36mreturn[39m [36mnull[39m[33m;[39m
+[31m[1m>[22m[39m[90m 91 |[39m   [36mif[39m (low [33m>=[39m high) [36mreturn[39m [36mnull[39m[33m;[39m
+ [90m    |[39m       [31m[1m^[22m[39m
+ [90m 92 |[39m   [36mreturn[39m { low[33m,[39m high }[33m;[39m
+ [90m 93 |[39m }[33m;[39m
+ [90m 94 |[39m[0m
+Next.js build worker exited with code: 1 and signal: null

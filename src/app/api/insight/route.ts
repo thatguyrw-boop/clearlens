@@ -519,24 +519,27 @@ ${memoryLine}
 ${questionLine}
 Respond ONLY as valid JSON with this exact shape:
 {
-  "insight": string,
-  "menuChoices": [
+  "type": "menu",
+  "choices": [
     {
       "title": string,
       "reason": string,
-      "orderText": string,
-      "caloriesLow": number|null,
-      "caloriesHigh": number|null,
-      "proteinLow": number|null,
-      "proteinHigh": number|null
+      "caloriesLow": number,
+      "caloriesHigh": number,
+      "proteinLow": number,
+      "proteinHigh": number
     }
   ]
 }
 
 Rules:
-- Return exactly 3 choices.
-- If a calorie or protein range is provided, include both low/high and keep low < high; otherwise use null for both.
-- Keep ranges realistic; avoid fake precision.
+- Recommend 2-3 dishes that fit a general health-conscious goal.
+- Prioritize higher protein and lighter preparations when possible.
+- Always return ranges; keep low < high.
+- Keep ranges realistic for restaurant portions; avoid fake precision.
+- Do NOT assume exact portions.
+- No servings, grams, or units beyond kcal and grams of protein.
+- Reason must be max 8 words.
 - No markdown, no extra keys, no extra text.
 `;
 
@@ -561,9 +564,9 @@ Rules:
           return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
         }
 
-        const insight = (getString(parsed, "insight") ?? "").trim();
-        const choicesUnknown = getUnknown(parsed, "menuChoices");
-        if (!insight || !Array.isArray(choicesUnknown)) {
+        const type = (getString(parsed, "type") ?? "").trim();
+        const choicesUnknown = getUnknown(parsed, "choices");
+        if (type !== "menu" || !Array.isArray(choicesUnknown)) {
           return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
         }
 
@@ -572,7 +575,7 @@ Rules:
 
           const title = (getString(choice, "title") ?? "").trim();
           const reason = (getString(choice, "reason") ?? "").trim();
-          const orderText = (getString(choice, "orderText") ?? "").trim();
+          const reasonWordCount = reason ? reason.split(/\s+/).length : 0;
 
           const caloriesRange = normalizeOptionalRange(
             getUnknown(choice, "caloriesLow"),
@@ -583,14 +586,23 @@ Rules:
             getUnknown(choice, "proteinHigh")
           );
 
-          if (!title || !reason || !orderText || !caloriesRange || !proteinRange) {
+          if (
+            !title ||
+            !reason ||
+            reasonWordCount > 8 ||
+            !caloriesRange ||
+            !proteinRange ||
+            caloriesRange.low === null ||
+            caloriesRange.high === null ||
+            proteinRange.low === null ||
+            proteinRange.high === null
+          ) {
             return null;
           }
 
           return {
             title,
             reason,
-            orderText,
             caloriesLow: caloriesRange.low,
             caloriesHigh: caloriesRange.high,
             proteinLow: proteinRange.low,
@@ -599,18 +611,17 @@ Rules:
         }).filter(Boolean) as Array<{
           title: string;
           reason: string;
-          orderText: string;
-          caloriesLow: number | null;
-          caloriesHigh: number | null;
-          proteinLow: number | null;
-          proteinHigh: number | null;
+          caloriesLow: number;
+          caloriesHigh: number;
+          proteinLow: number;
+          proteinHigh: number;
         }>;
 
-        if (menuChoices.length !== 3) {
+        if (menuChoices.length < 2 || menuChoices.length > 3) {
           return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
         }
 
-        return NextResponse.json({ insight, menuChoices });
+        return NextResponse.json({ type: "menu", choices: menuChoices });
       }
       case "pantry": {
         const pantryPrompt = `
