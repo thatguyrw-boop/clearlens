@@ -170,9 +170,9 @@ Return ONLY valid JSON with this exact shape:
     "fatGPerServing": number,
     "fiberGPerServing": number,
     "servingSizeText": string,
-    "servingSizeGrams": number,
+    "servingSizeGrams": number|null,
     "servingSizeMl": number,
-    "servingSizeFlOz": number,
+    "servingSizeFlOz": number|null,
     "servingsPerContainer": number,
     "isLiquid": boolean,
     "primaryUnit": "g"|"ml"|"fl_oz"|"serving"
@@ -180,6 +180,10 @@ Return ONLY valid JSON with this exact shape:
 }
 Title should be 2-5 words from front/package text. Use null if not found.
 Also extract a short product name/title if visible on the package (2-6 words). If not visible, title=null.
+Serving size rules:
+- servingSizeText must match the label exactly (include grams if shown, e.g., "2 tbsp (32g)").
+- servingSizeGrams must be a number when grams are shown (e.g., 32); otherwise null.
+- servingSizeFlOz must be a number when fl oz are shown; otherwise null.
 Optional fields may be omitted if not visible.
 `;
 
@@ -238,6 +242,7 @@ Optional fields may be omitted if not visible.
       const servingSizeMl = toNullableNumber(servingSizeMlRaw);
       const servingSizeFlOz = toNullableNumber(servingSizeFlOzRaw);
       const servingsPerContainer = toNullableNumber(servingsPerContainerRaw);
+      const servingSizeGramsOut = servingSizeGrams ?? null;
       const isLiquidRaw = label ? getUnknown(label, "isLiquid") : undefined;
       let isLiquid: boolean | undefined;
       let isLiquidInvalid = false;
@@ -304,7 +309,7 @@ Optional fields may be omitted if not visible.
           ...(fatGPerServing !== undefined && fatGPerServing !== null ? { fatGPerServing } : {}),
           ...(fiberGPerServing !== undefined && fiberGPerServing !== null ? { fiberGPerServing } : {}),
           servingSizeText,
-          ...(servingSizeGrams !== undefined && servingSizeGrams !== null ? { servingSizeGrams } : {}),
+          servingSizeGrams: servingSizeGramsOut,
           ...(servingSizeMl !== undefined && servingSizeMl !== null ? { servingSizeMl } : {}),
           ...(servingSizeFlOz !== undefined && servingSizeFlOz !== null ? { servingSizeFlOz } : {}),
           ...(servingsPerContainer !== undefined && servingsPerContainer !== null ? { servingsPerContainer } : {}),
