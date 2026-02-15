@@ -93,6 +93,8 @@ const normalizeOptionalRange = (lowRaw: unknown, highRaw: unknown) => {
   return { low: lowN, high: highN };
 };
 
+const clamp = (n: number, min: number, max: number) => Math.min(max, Math.max(min, n));
+
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -570,54 +572,68 @@ Rules:
           return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
         }
 
-        const menuChoices = choicesUnknown.map((choice: unknown) => {
-          if (!isRecord(choice)) return null;
+        const menuChoicesAll = choicesUnknown
+          .map((choice: unknown) => {
+            if (!isRecord(choice)) return null;
 
-          const title = (getString(choice, "title") ?? "").trim();
-          const reason = (getString(choice, "reason") ?? "").trim();
-          const reasonWordCount = reason ? reason.split(/\s+/).length : 0;
+            const title = (getString(choice, "title") ?? "").trim();
+            const reason = (getString(choice, "reason") ?? "").trim();
+            const reasonWordCount = reason ? reason.split(/\s+/).length : 0;
 
-          const caloriesRange = normalizeOptionalRange(
-            getUnknown(choice, "caloriesLow"),
-            getUnknown(choice, "caloriesHigh")
-          );
-          const proteinRange = normalizeOptionalRange(
-            getUnknown(choice, "proteinLow"),
-            getUnknown(choice, "proteinHigh")
-          );
+            const caloriesRange = normalizeOptionalRange(
+              getUnknown(choice, "caloriesLow"),
+              getUnknown(choice, "caloriesHigh")
+            );
+            const proteinRange = normalizeOptionalRange(
+              getUnknown(choice, "proteinLow"),
+              getUnknown(choice, "proteinHigh")
+            );
 
-          if (
-            !title ||
-            !reason ||
-            reasonWordCount > 8 ||
-            !caloriesRange ||
-            !proteinRange ||
-            caloriesRange.low === null ||
-            caloriesRange.high === null ||
-            proteinRange.low === null ||
-            proteinRange.high === null
-          ) {
-            return null;
-          }
+            if (
+              !title ||
+              !reason ||
+              reasonWordCount > 8 ||
+              !caloriesRange ||
+              !proteinRange ||
+              caloriesRange.low === null ||
+              caloriesRange.high === null ||
+              proteinRange.low === null ||
+              proteinRange.high === null
+            ) {
+              return null;
+            }
 
-          return {
-            title,
-            reason,
-            caloriesLow: caloriesRange.low,
-            caloriesHigh: caloriesRange.high,
-            proteinLow: proteinRange.low,
-            proteinHigh: proteinRange.high
-          };
-        }).filter(Boolean) as Array<{
-          title: string;
-          reason: string;
-          caloriesLow: number;
-          caloriesHigh: number;
-          proteinLow: number;
-          proteinHigh: number;
-        }>;
+            // Clamp to sane bounds to reduce hallucinated outliers
+            const caloriesLow = clamp(caloriesRange.low, 300, 1200);
+            const caloriesHigh = clamp(caloriesRange.high, 300, 1200);
+            const proteinLow = clamp(proteinRange.low, 15, 70);
+            const proteinHigh = clamp(proteinRange.high, 15, 70);
 
-        if (menuChoices.length < 2 || menuChoices.length > 3) {
+            // Re-check after clamping
+            if (caloriesLow >= caloriesHigh || proteinLow >= proteinHigh) return null;
+
+            return {
+              title,
+              reason,
+              caloriesLow,
+              caloriesHigh,
+              proteinLow,
+              proteinHigh
+            };
+          })
+          .filter(Boolean) as Array<{
+            title: string;
+            reason: string;
+            caloriesLow: number;
+            caloriesHigh: number;
+            proteinLow: number;
+            proteinHigh: number;
+          }>;
+
+        // Keep at most 3 (MVP rule)
+        const menuChoices = menuChoicesAll.slice(0, 3);
+
+        if (menuChoices.length < 2) {
           return NextResponse.json({ error: "Invalid menu response" }, { status: 500 });
         }
 
