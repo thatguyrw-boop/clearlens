@@ -5,7 +5,10 @@ import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
 
 function getLLMClient() {
-  const provider = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
+  const configuredProvider = process.env.LLM_PROVIDER;
+  const provider = String(
+    configuredProvider || (process.env.XAI_API_KEY ? "xai" : "openai")
+  ).toLowerCase();
   if (provider === "xai" || provider === "grok") {
     const apiKey = process.env.XAI_API_KEY;
     if (!apiKey) throw new Error("Server misconfigured: missing XAI_API_KEY");
@@ -104,8 +107,12 @@ export async function POST(req: Request) {
     const question = typeof body?.question === "string" ? body.question.trim() : "";
     if (question.toLowerCase() === "version") {
       const sha = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VERCEL_GIT_COMMIT_REF || "local";
-      const p = String(process.env.LLM_PROVIDER || "openai").toLowerCase();
-      return NextResponse.json({ insight: `backend:${String(sha).slice(0, 12)} provider:${p}` });
+      const c = getLLMClient();
+      const hasXaiKey = Boolean(process.env.XAI_API_KEY);
+      const hasOpenAIKey = Boolean(process.env.OPENAI_API_KEY);
+      return NextResponse.json({
+        insight: `backend:${String(sha).slice(0, 12)} provider:${c.provider} model:${c.model} xaiKey:${hasXaiKey} openaiKey:${hasOpenAIKey}`
+      });
     }
 
     const { imageBase64 } = body ?? {};
