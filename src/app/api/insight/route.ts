@@ -125,6 +125,10 @@ export async function POST(req: Request) {
 
     const userMemory = isRecord(body?.userMemory) ? body.userMemory : undefined;
     const chatHistory = Array.isArray(body?.chatHistory) ? body.chatHistory : undefined;
+    const healthFactors = body?.userMemory?.habits?.healthFactors ?? [];
+    const healthLine = healthFactors.length
+      ? `Health factors: ${healthFactors.join(", ")}. Avoid unsafe foods and suggest safe substitutions.`
+      : "";
 
     const needsImage = ["label", "label_extract", "label_name", "plate", "menu", "pantry"].includes(mode);
     const forceVisionOpenAI = needsImage;
@@ -168,6 +172,7 @@ export async function POST(req: Request) {
     const handleLabelExtract = async () => {
       const visionPrompt = `
 You are reading a Nutrition Facts label.
+${healthLine}
 Return ONLY valid JSON with this exact shape:
 {
   "insight": string,
@@ -343,6 +348,7 @@ Optional fields may be omitted if not visible.
 Extract the product title from this package photo using the LARGEST visible text.
 Return 2–12 words. Include brand + product if visible.
 Example: "Quest Tortilla Style Protein Chips"
+${healthLine}
 Return ONLY strict JSON:
 { "insight": string, "label": { "title": string | null } }
 `;
@@ -394,6 +400,7 @@ Return ONLY strict JSON:
         const PROMPT = `
 Extract the product title from this package photo using the LARGEST visible text.
 Return 2–12 words (brand + product). Example: "Quest Tortilla Style Protein Chips".
+${healthLine}
 Return ONLY strict JSON:
 { "insight": string, "label": { "title": string | null } }
 `;
@@ -450,6 +457,7 @@ Return ONLY strict JSON:
         const visionPrompt = `
 You are estimating nutrition for a plate of food from a photo.
 ${memoryLine}
+${healthLine}
 ${questionLine}
 Identify foods and estimate LOW/MID/HIGH calories and protein.
 Respond ONLY as valid JSON with this exact shape:
@@ -525,6 +533,7 @@ Respond ONLY as valid JSON with this exact shape:
         const visionPrompt = `
 You are reading a menu from an image.
 ${memoryLine}
+${healthLine}
 ${questionLine}
 Respond ONLY as valid JSON with this exact shape:
 {
@@ -650,6 +659,7 @@ Rules:
         const pantryPrompt = `
 You are analyzing a photo of a pantry or fridge.
 ${memoryLine}
+${healthLine}
 ${questionLine}
 
 Task:
@@ -756,6 +766,7 @@ Optional fields may be omitted if not visible.
         const prompt = `
 You are a helpful nutrition coach.
 ${memoryLine}
+${healthLine}
 ${historyLine}
 ${questionLine}
 Respond in plain text.
@@ -779,6 +790,7 @@ Respond in plain text.
         const prompt = `
 Estimate calories and protein from this text description.
 ${memoryLine}
+${healthLine}
 ${questionLine}
 Return a single line with LOW/MID/HIGH estimates.
 Example format: LOW: 350 cal, 20g protein | MID: 500 cal, 30g protein | HIGH: 650 cal, 40g protein.
